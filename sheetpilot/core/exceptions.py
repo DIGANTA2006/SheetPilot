@@ -89,3 +89,9 @@ class UserCancelledError(SheetPilotError):
     """The user safely cancelled an operation."""
 
     code = "user_cancelled"
+
+
+class OutputFailureError(SheetPilotError):
+    """An output could not be staged, validated, or committed safely."""
+
+    code = "output_failure"

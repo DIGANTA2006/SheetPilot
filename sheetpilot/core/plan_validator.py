@@ -8,6 +8,7 @@ from typing import Any
 from sheetpilot.core.exceptions import InvalidPlanError
 from sheetpilot.core.operation_registry import OperationRegistry
 from sheetpilot.core.plan_schema import OperationPlan
+from sheetpilot.operations.validation import parse_quality_rules
 
 _FORBIDDEN_PARAMETER_KEYS = {
     "code",
@@ -20,6 +21,7 @@ _FORBIDDEN_PARAMETER_KEYS = {
     "sql",
     "vba",
 }
+_RESERVED_PREFIX = "_sheetpilot_"
 
 
 def _reject_executable_keys(value: Any) -> None:
@@ -41,9 +43,16 @@ class PlanValidator:
 
     def validate(self, plan: OperationPlan) -> dict[str, object]:
         validated: dict[str, object] = {}
+        for rule in plan.validations:
+            _reject_executable_keys(rule.parameters)
+        parse_quality_rules([{"kind": rule.name, **rule.parameters} for rule in plan.validations])
         for step in plan.steps:
             if not step.enabled:
                 continue
+            if any(
+                column.casefold().startswith(_RESERVED_PREFIX) for column in step.target.columns
+            ):
+                raise InvalidPlanError("Reserved application columns cannot be plan targets.")
             _reject_executable_keys(step.parameters)
             operation = self._registry.get(step.operation)
             typed_parameters = self._registry.validate_parameters(step.operation, step.parameters)

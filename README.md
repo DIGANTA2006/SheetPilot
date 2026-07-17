@@ -36,6 +36,12 @@ writers, polished new workbooks, copy-only style-preserving edits, trusted DuckD
 and structured formula templates. Formula text is generated only by application code;
 plans never contain raw Excel formulas.
 
+Phase 4 adds the transactional workflow: deterministic previews and change digests,
+step-specific destructive confirmation, practical per-cell rejection, source rehashing,
+verified backups, isolated re-execution, validation and reconciliation, same-directory
+staging, reopen validation, no-overwrite publication, failed-artifact quarantine, and an
+aggregate-only JSON audit. A validation or audit failure never produces a completed job.
+
 No cloud provider is required. The application starts in local/offline mode and the AI
 planner remains separate from the deterministic executor.
 

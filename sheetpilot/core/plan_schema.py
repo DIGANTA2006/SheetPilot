@@ -75,6 +75,7 @@ class OutputSettings(StrictModel):
     output_name: str = Field(min_length=1, max_length=180)
     format: OutputFormat
     preserve_formatting: bool = True
+    retain_calculation_formulas: bool = False
 
 
 class PrivacyMetadata(StrictModel):

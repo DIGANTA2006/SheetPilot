@@ -8,8 +8,9 @@ from enum import StrEnum
 from typing import Annotated, Literal
 
 import polars as pl
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
+from sheetpilot.core.exceptions import InvalidPlanError
 from sheetpilot.operations.base import OperationParameters
 from sheetpilot.operations.tabular import TableOperationResult, TabularOperation, require_columns
 
@@ -107,6 +108,15 @@ QualityRule = Annotated[
     | InvalidHeaderRule,
     Field(discriminator="kind"),
 ]
+_QUALITY_RULE_ADAPTER = TypeAdapter(list[QualityRule])
+
+
+def parse_quality_rules(values: list[dict[str, object]]) -> list[QualityRule]:
+    """Reject unknown validation kinds and parameters through one strict adapter."""
+    try:
+        return _QUALITY_RULE_ADAPTER.validate_python(values)
+    except ValidationError as error:
+        raise InvalidPlanError(f"Invalid validation rules: {error}") from error
 
 
 class ValidationSeverity(StrEnum):

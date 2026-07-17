@@ -36,11 +36,18 @@ class IsolatedWorkspace:
         (self.path / ".owner").write_text(str(uuid4()), encoding="ascii")
         return self
 
-    def copy_source(self, source: Path, expected: FileFingerprint) -> Path:
+    def copy_source(
+        self,
+        source: Path,
+        expected: FileFingerprint,
+        *,
+        identity: str | None = None,
+    ) -> Path:
         if self.input_dir is None or self.work_dir is None:
             raise RuntimeError("Workspace is not active.")
         verify_fingerprint(source, expected)
-        name = sanitize_filename(source.name)
+        prefix = f"{sanitize_filename(identity)}_" if identity else ""
+        name = f"{prefix}{sanitize_filename(source.name)}"
         immutable_copy = ensure_within(self.input_dir / name, self.input_dir)
         working_copy = ensure_within(self.work_dir / name, self.work_dir)
         shutil.copy2(source, immutable_copy)
