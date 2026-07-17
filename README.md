@@ -29,6 +29,13 @@ and deterministic-ID column actions, static arithmetic/percentage/quantity-price
 difference/age/classification/group/running-total/lookup calculations, summary statistics,
 and typed quality/reconciliation rules. Plans cannot provide executable formulas or code.
 
+Phase 3C completes the deterministic engine layer with strict/union table merges,
+category-to-sheet and workbook splitting, selected-sheet export, CSV merge and
+CSV-to-Excel, sheet rename and summary-copy workflows, formula-injection-safe CSV/XLSX
+writers, polished new workbooks, copy-only style-preserving edits, trusted DuckDB unions,
+and structured formula templates. Formula text is generated only by application code;
+plans never contain raw Excel formulas.
+
 No cloud provider is required. The application starts in local/offline mode and the AI
 planner remains separate from the deterministic executor.
 

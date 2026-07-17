@@ -200,6 +200,8 @@ def test_default_registry_is_explicit() -> None:
         "quality.validate",
         "rows.filter",
         "rows.sort",
+        "table.split_by_category",
+        "tables.merge",
         "text.clean",
         "values.standardize",
     )

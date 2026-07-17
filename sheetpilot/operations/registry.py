@@ -12,7 +12,9 @@ from sheetpilot.operations.duplicates import (
     HandleDuplicatesOperation,
 )
 from sheetpilot.operations.filtering import FilterRowsOperation
+from sheetpilot.operations.merging import MergeTablesOperation
 from sheetpilot.operations.sorting import SortRowsOperation
+from sheetpilot.operations.splitting import SplitByCategoryOperation
 from sheetpilot.operations.standardisation import StandardizeValuesOperation
 from sheetpilot.operations.validation import ValidateDataOperation
 
@@ -31,5 +33,7 @@ def build_default_registry() -> OperationRegistry:
             CalculateColumnOperation(),
             SummaryStatisticsOperation(),
             ValidateDataOperation(),
+            SplitByCategoryOperation(),
+            MergeTablesOperation(),
         ]
     )
