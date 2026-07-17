@@ -192,6 +192,12 @@ def test_stable_multi_column_sort_and_order_metadata() -> None:
 
 def test_default_registry_is_explicit() -> None:
     assert build_default_registry().names() == (
+        "calculate.column",
+        "calculate.summary",
+        "columns.transform",
+        "duplicates.fuzzy_review",
+        "duplicates.handle",
+        "quality.validate",
         "rows.filter",
         "rows.sort",
         "text.clean",

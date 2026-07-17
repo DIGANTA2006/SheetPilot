@@ -23,6 +23,12 @@ exact/text/numeric/date/blank/list filtering, and stable multi-key sorting. Unce
 standardizations are left unchanged and counted for review; filtering and any explicit
 null replacement are dynamically marked destructive for confirmation.
 
+Phase 3B adds exact duplicate mark/remove/move and explicit complementary merging,
+review-only fuzzy groups, rename/reorder/add/remove/split/combine/extract/lookup/row-number
+and deterministic-ID column actions, static arithmetic/percentage/quantity-price/GST/date
+difference/age/classification/group/running-total/lookup calculations, summary statistics,
+and typed quality/reconciliation rules. Plans cannot provide executable formulas or code.
+
 No cloud provider is required. The application starts in local/offline mode and the AI
 planner remains separate from the deterministic executor.
 
