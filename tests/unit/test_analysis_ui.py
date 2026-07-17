@@ -15,6 +15,9 @@ def test_analysis_page_runs_profiler_off_ui_thread(tmp_path: Path, qtbot: QtBot)
     qtbot.addWidget(page)
     page.show()
     page.add_files((source,))
+    page.job_name.setText("Source analysis test")
+    page.instructions.setPlainText("Review this source safely")
+    page.output_directory.setText(str(tmp_path))
 
     with qtbot.waitSignal(page.analysis_completed, timeout=5000):
         page.start_analysis()

@@ -7,15 +7,30 @@ import multiprocessing
 import sys
 from collections.abc import Sequence
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 
 from sheetpilot.app.bootstrap import build_context, build_main_window
 
 
 def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="SheetPilot desktop application")
-    parser.add_argument("--version", action="store_true", help="print the application version")
+    launch_mode = parser.add_mutually_exclusive_group()
+    launch_mode.add_argument("--version", action="store_true", help="print the application version")
+    launch_mode.add_argument(
+        "--smoke-test",
+        action="store_true",
+        help="initialize the application and exit without entering the event loop",
+    )
     return parser.parse_args(arguments)
+
+
+def run_startup_smoke(application: QApplication, window: QWidget) -> int:
+    """Exercise Qt and the fully composed main window, then exit immediately."""
+    window.show()
+    application.processEvents()
+    window.close()
+    application.processEvents()
+    return 0
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
@@ -31,6 +46,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
         application = QApplication(sys.argv[:1])
     context = build_context()
     window = build_main_window(application, context)
+    if options.smoke_test:
+        return run_startup_smoke(application, window)
     window.show()
     return application.exec()
 

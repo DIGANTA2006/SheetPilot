@@ -12,6 +12,7 @@ from openpyxl.utils.exceptions import InvalidFileException
 from sheetpilot.app.config import SecurityLimits
 from sheetpilot.core.exceptions import CorruptWorkbookError, FileLimitError
 from sheetpilot.core.profile_models import SheetProfile
+from sheetpilot.engines.openpyxl_safety import close_workbook
 from sheetpilot.engines.profile_helpers import profile_rows
 
 
@@ -104,4 +105,4 @@ def profile_workbook(path: Path, limits: SecurityLimits) -> WorkbookAnalysis:
             estimated_memory_bytes=estimated_total,
         )
     finally:
-        workbook.close()
+        close_workbook(workbook)

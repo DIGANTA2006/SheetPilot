@@ -95,3 +95,27 @@ class OutputFailureError(SheetPilotError):
     """An output could not be staged, validated, or committed safely."""
 
     code = "output_failure"
+
+
+class StorageError(SheetPilotError):
+    """Local metadata could not be read or written safely."""
+
+    code = "storage_error"
+
+
+class ExcelComUnavailableError(SheetPilotError):
+    """Microsoft Excel automation is unavailable on this computer."""
+
+    code = "excel_com_unavailable"
+
+
+class ExcelComOperationError(SheetPilotError):
+    """An approved Microsoft Excel automation action failed safely."""
+
+    code = "excel_com_operation_failed"
+
+
+class TrustedMacroError(SecurityError):
+    """A macro request did not satisfy the explicit trust policy."""
+
+    code = "trusted_macro_rejected"

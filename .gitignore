@@ -13,6 +13,7 @@ htmlcov/
 build/
 dist/
 release/
+*.spec.bak
 
 # Runtime files
 logs/

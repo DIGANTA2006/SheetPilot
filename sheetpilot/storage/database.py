@@ -46,6 +46,22 @@ _MIGRATIONS: tuple[str, ...] = (
         created_at TEXT NOT NULL
     );
     """,
+    """
+    ALTER TABLE jobs ADD COLUMN audit_metadata_json TEXT;
+    ALTER TABLE jobs ADD COLUMN updated_at TEXT;
+    ALTER TABLE workflow_templates ADD COLUMN description TEXT NOT NULL DEFAULT '';
+    ALTER TABLE workflow_templates ADD COLUMN source_slot_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE settings ADD COLUMN updated_at TEXT;
+    CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+    CREATE INDEX IF NOT EXISTS idx_jobs_workflow_id ON jobs(workflow_id);
+    CREATE INDEX IF NOT EXISTS idx_validation_summaries_job_id
+        ON validation_summaries(job_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_workflow_templates_updated_at
+        ON workflow_templates(updated_at DESC);
+    UPDATE jobs SET updated_at = created_at WHERE updated_at IS NULL;
+    UPDATE settings SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL;
+    """,
 )
 
 
@@ -61,6 +77,7 @@ class Database:
         connection = sqlite3.connect(self.path, timeout=10)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA busy_timeout = 10000")
         try:
             yield connection
             connection.commit()

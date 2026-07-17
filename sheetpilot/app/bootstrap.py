@@ -41,4 +41,8 @@ def build_context(config: AppConfig | None = None) -> ApplicationContext:
 def build_main_window(application: QApplication, context: ApplicationContext) -> MainWindow:
     """Construct the real main window from an initialized context."""
     del application
-    return MainWindow(context.profiler)
+    return MainWindow(
+        context.profiler,
+        config=context.config,
+        registry=context.registry,
+    )

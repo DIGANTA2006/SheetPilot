@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict
 
 from sheetpilot.core.exceptions import InvalidPlanError, OutputCollisionError
 from sheetpilot.engines.formulas import GeneratedFormulaSpec, render_formula
+from sheetpilot.engines.openpyxl_safety import close_workbook
 from sheetpilot.security.formula_guard import is_formula_injection
 
 
@@ -144,8 +145,8 @@ def modify_workbook_copy(
             )
         workbook.save(destination)
     except BaseException:
-        workbook.close()
+        close_workbook(workbook)
         destination.unlink(missing_ok=True)
         raise
-    workbook.close()
+    close_workbook(workbook)
     return destination

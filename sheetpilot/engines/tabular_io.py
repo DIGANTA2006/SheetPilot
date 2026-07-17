@@ -14,6 +14,7 @@ from sheetpilot.core.exceptions import (
     UnsupportedFormatError,
 )
 from sheetpilot.engines.csv_engine import read_csv
+from sheetpilot.engines.openpyxl_safety import close_workbook
 from sheetpilot.security.archive_guard import inspect_ooxml_archive
 
 
@@ -31,7 +32,7 @@ def read_workbook_table(path: Path, sheet_name: str) -> pl.DataFrame:
             raise InvalidPlanError(f"Worksheet is missing: {sheet_name}")
         rows = list(workbook[sheet_name].iter_rows(values_only=True))
     finally:
-        workbook.close()
+        close_workbook(workbook)
     if not rows:
         return pl.DataFrame()
     headers = [str(value).strip() if value is not None else "" for value in rows[0]]

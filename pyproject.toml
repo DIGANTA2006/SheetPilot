@@ -22,6 +22,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+excel = [
+    "pywin32==312; sys_platform == 'win32'",
+]
 dev = [
     "bandit==1.9.4",
     "mypy==2.3.0",
