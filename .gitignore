@@ -1,0 +1,29 @@
+﻿# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Build output
+build/
+dist/
+release/
+
+# Runtime files
+logs/
+temp/
+tmp/
+*.log
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Windows
+Thumbs.db
+Desktop.ini
