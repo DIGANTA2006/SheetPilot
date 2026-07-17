@@ -10,6 +10,7 @@ from sheetpilot.app.config import AppConfig
 from sheetpilot.app.logging_config import configure_logging
 from sheetpilot.core.file_profiler import FileProfiler
 from sheetpilot.core.operation_registry import OperationRegistry
+from sheetpilot.operations.registry import build_default_registry
 from sheetpilot.storage.database import Database
 from sheetpilot.ui.main_window import MainWindow
 
@@ -32,7 +33,7 @@ def build_context(config: AppConfig | None = None) -> ApplicationContext:
     return ApplicationContext(
         config=resolved,
         database=database,
-        registry=OperationRegistry(),
+        registry=build_default_registry(),
         profiler=FileProfiler(resolved.limits),
     )
 

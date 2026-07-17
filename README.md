@@ -17,6 +17,12 @@ blanks, duplicates, candidate keys, formulas, merged/protected/hidden content, m
 external links, named ranges, formula-injection risk, and data-quality warning counts.
 It verifies the source SHA-256 again after analysis and aborts if the file changed.
 
+Phase 3A adds explicit Polars operations for the complete text-cleaning action set,
+review-safe state/district/category/telephone/email/date/numeric standardization, typed
+exact/text/numeric/date/blank/list filtering, and stable multi-key sorting. Uncertain
+standardizations are left unchanged and counted for review; filtering and any explicit
+null replacement are dynamically marked destructive for confirmation.
+
 No cloud provider is required. The application starts in local/offline mode and the AI
 planner remains separate from the deterministic executor.
 

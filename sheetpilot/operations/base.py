@@ -35,6 +35,11 @@ class Operation[ParametersT: OperationParameters](ABC):
         """Return aggregate validation warnings for an operation result."""
         return []
 
+    def is_destructive(self, parameters: ParametersT) -> bool:
+        """Return whether these validated parameters remove or overwrite data."""
+        del parameters
+        return self.destructive
+
     @property
     def audit_description(self) -> str:
         return f"{self.name} version {self.version}"

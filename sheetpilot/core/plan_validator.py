@@ -46,11 +46,10 @@ class PlanValidator:
                 continue
             _reject_executable_keys(step.parameters)
             operation = self._registry.get(step.operation)
-            if step.destructive != operation.destructive:
+            typed_parameters = self._registry.validate_parameters(step.operation, step.parameters)
+            if step.destructive != operation.is_destructive(typed_parameters):
                 raise InvalidPlanError(
                     f"Destructive metadata does not match operation {step.operation}."
                 )
-            validated[step.step_id] = self._registry.validate_parameters(
-                step.operation, step.parameters
-            )
+            validated[step.step_id] = typed_parameters
         return validated
