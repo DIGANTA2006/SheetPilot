@@ -6,7 +6,9 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import openpyxl
 import polars as pl
+import pytest
 
+from sheetpilot.core.exceptions import InvalidPlanError
 from sheetpilot.engines.openpyxl_export import modify_workbook_copy
 
 _CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
@@ -91,3 +93,18 @@ def test_copy_edit_preserves_vba_project_without_running_it(tmp_path: Path) -> N
         reopened.close()
         if vba_archive is not None:
             vba_archive.close()
+
+
+def test_macro_enabled_copy_cannot_be_mislabeled_as_xlsx(tmp_path: Path) -> None:
+    source = tmp_path / "source.xlsm"
+    destination = tmp_path / "unsafe.xlsx"
+    _macro_enabled_fixture(source)
+
+    with pytest.raises(InvalidPlanError, match="retain the source extension"):
+        modify_workbook_copy(
+            source,
+            destination,
+            replacements={"Data": pl.DataFrame({"ID": [1], "Name": ["Updated"]})},
+        )
+
+    assert not destination.exists()

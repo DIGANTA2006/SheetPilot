@@ -67,10 +67,21 @@ redaction, and consent gates are implemented and tested; no remote provider or c
 is bundled, so provider-backed planning is visibly unavailable and local/manual planning
 continues to work without internet access.
 
+Phase 8 hardens advanced workbook support behind an optional Windows Excel COM service.
+Recalculation, explicitly named pivot refresh, single-sheet PDF export, and hash-bound
+trusted-macro execution operate only on validated job-owned working copies, with automatic
+macros disabled on open. Every artifact uses same-directory staging, format validation,
+atomic no-clobber publication, and failed-stage quarantine. Synthetic `.xlsm` regressions
+prove VBA payload preservation without execution or extension spoofing. On the development
+machine, a real installed Excel instance successfully recalculates a disposable workbook,
+exports and validates a PDF, preserves the source hash and timestamp, and exits without an
+orphan process; pivot and trusted-macro execution remain fixture-driven safety tests so no
+unknown macro or client workbook is ever run.
+
 No cloud provider is required. The application starts in local/offline mode and the AI
-planner remains separate from the deterministic executor. Optional Excel automation and
-frozen packaging are tracked as later phases and are not described as complete here until
-their own gates and commits pass.
+planner remains separate from the deterministic executor. Excel is optional and local
+processing remains usable when it is absent. Frozen packaging is the remaining phase and
+is not described as complete until its build and executable tests pass.
 
 ## Development setup
 

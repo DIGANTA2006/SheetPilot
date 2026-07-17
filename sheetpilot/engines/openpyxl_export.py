@@ -112,13 +112,22 @@ def modify_workbook_copy(
     formats: dict[str, list[ColumnFormatSpec]] | None = None,
 ) -> Path:
     """Modify only a new copy; the supplied source copy is opened read-only in intent."""
+    source_suffix = source_copy.suffix.casefold()
+    destination_suffix = destination.suffix.casefold()
+    if source_suffix not in {".xlsx", ".xlsm"}:
+        raise InvalidPlanError("Workbook copy modification supports only .xlsx and .xlsm files.")
+    if destination_suffix != source_suffix:
+        raise InvalidPlanError(
+            "Workbook copy output must retain the source extension; macros must never be "
+            "embedded in an .xlsx file."
+        )
     if destination.exists():
         raise OutputCollisionError("Workbook modification cannot overwrite an output.")
     if source_copy.resolve() == destination.resolve():
         raise InvalidPlanError("Source and destination must be distinct.")
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source_copy, destination)
-    keep_vba = source_copy.suffix.casefold() == ".xlsm"
+    keep_vba = source_suffix == ".xlsm"
     workbook = openpyxl.load_workbook(destination, keep_vba=keep_vba, keep_links=False)
     try:
         renames = sheet_renames or {}
