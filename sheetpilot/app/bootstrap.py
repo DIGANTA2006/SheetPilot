@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QApplication
 
 from sheetpilot.app.config import AppConfig
 from sheetpilot.app.logging_config import configure_logging
+from sheetpilot.core.file_profiler import FileProfiler
 from sheetpilot.core.operation_registry import OperationRegistry
 from sheetpilot.storage.database import Database
 from sheetpilot.ui.main_window import MainWindow
@@ -18,6 +19,7 @@ class ApplicationContext:
     config: AppConfig
     database: Database
     registry: OperationRegistry
+    profiler: FileProfiler
 
 
 def build_context(config: AppConfig | None = None) -> ApplicationContext:
@@ -31,10 +33,11 @@ def build_context(config: AppConfig | None = None) -> ApplicationContext:
         config=resolved,
         database=database,
         registry=OperationRegistry(),
+        profiler=FileProfiler(resolved.limits),
     )
 
 
 def build_main_window(application: QApplication, context: ApplicationContext) -> MainWindow:
     """Construct the real main window from an initialized context."""
-    del application, context
-    return MainWindow()
+    del application
+    return MainWindow(context.profiler)

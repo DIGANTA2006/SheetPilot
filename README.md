@@ -6,10 +6,16 @@ never modified in place.
 
 ## Current development status
 
-Phase 1 establishes the application foundation: a strict Pydantic plan schema, an
-explicit operation registry, local SQLite metadata storage, privacy-filtered structured
-logging, source hashing, verified backup and restore, isolated workspaces, path guards,
-formula-injection detection, and a launchable PySide6 shell.
+Phases 1 and 2 establish the safety foundation and non-destructive analysis workflow:
+a strict Pydantic plan schema, explicit operation registry, local SQLite metadata,
+privacy-filtered logging, hashing, verified backup/restore, isolated workspaces, path and
+formula guards, bounded OOXML archive inspection, Polars CSV profiling, openpyxl workbook
+profiling, and a background PySide6 source-analysis screen.
+
+Analysis reports aggregate metadata only: sheets, dimensions, headers, inferred types,
+blanks, duplicates, candidate keys, formulas, merged/protected/hidden content, macros,
+external links, named ranges, formula-injection risk, and data-quality warning counts.
+It verifies the source SHA-256 again after analysis and aborts if the file changed.
 
 No cloud provider is required. The application starts in local/offline mode and the AI
 planner remains separate from the deterministic executor.

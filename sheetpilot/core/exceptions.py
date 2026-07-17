@@ -67,6 +67,24 @@ class CorruptWorkbookError(SheetPilotError):
     code = "corrupt_workbook"
 
 
+class PasswordProtectedWorkbookError(CorruptWorkbookError):
+    """A workbook is encrypted and cannot be inspected safely."""
+
+    code = "password_protected_workbook"
+
+
+class FileLimitError(SecurityError):
+    """An input exceeds a configured resource limit."""
+
+    code = "file_limit_exceeded"
+
+
+class ArchiveSecurityError(SecurityError):
+    """An OOXML archive is malformed or unsafe to open."""
+
+    code = "unsafe_archive"
+
+
 class UserCancelledError(SheetPilotError):
     """The user safely cancelled an operation."""
 

@@ -20,6 +20,7 @@ class SecurityLimits(BaseModel):
     max_archive_member_bytes: int = Field(default=256 * 1024 * 1024, gt=0)
     max_archive_uncompressed_bytes: int = Field(default=1024 * 1024 * 1024, gt=0)
     max_compression_ratio: float = Field(default=200.0, gt=1)
+    max_estimated_memory_bytes: int = Field(default=1024 * 1024 * 1024, gt=0)
 
 
 class AppConfig(BaseModel):
