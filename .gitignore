@@ -35,3 +35,6 @@ Desktop.ini
 
 # Local instruction-file backups
 _instruction_backup_*/
+
+# Local Codex recovery metadata
+CODEX_RECOVERY_STATUS.txt
