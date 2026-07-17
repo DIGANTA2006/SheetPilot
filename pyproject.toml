@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=83"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sheetpilot"
+version = "0.1.0"
+description = "Safe, deterministic Excel and CSV workflow automation for Windows"
+readme = "README.md"
+requires-python = "==3.12.*"
+license = { text = "MIT" }
+authors = [{ name = "SheetPilot contributors" }]
+dependencies = [
+    "duckdb==1.5.4",
+    "openpyxl==3.1.5",
+    "pandas==3.0.3",
+    "polars==1.42.1",
+    "pydantic==2.13.4",
+    "PySide6==6.11.1",
+    "XlsxWriter==3.2.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "bandit==1.9.4",
+    "mypy==2.3.0",
+    "pyinstaller==6.21.0",
+    "pytest==9.1.1",
+    "pytest-qt==4.5.0",
+    "ruff==0.15.22",
+    "types-openpyxl==3.1.5.20260518",
+]
+
+[project.scripts]
+sheetpilot = "sheetpilot.app.main:main"
+
+[tool.setuptools.packages.find]
+include = ["sheetpilot*"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "PTH", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_configs = true
+packages = ["sheetpilot"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers --strict-config"
+testpaths = ["tests"]
+qt_api = "pyside6"
+markers = [
+    "excel_com: requires a local Microsoft Excel installation",
+    "packaging: exercises a frozen application build",
+]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "build", "dist"]
+skips = ["B101"]

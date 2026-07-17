@@ -7,6 +7,7 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+.python-version
 
 # Build output
 build/
@@ -18,6 +19,7 @@ logs/
 temp/
 tmp/
 *.log
+*.sqlite3
 
 # Secrets
 .env
@@ -27,6 +29,8 @@ tmp/
 # Windows
 Thumbs.db
 Desktop.ini
+.idea/
+.coverage.*
 
 # Local instruction-file backups
 _instruction_backup_*/
