@@ -10,7 +10,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict
 
 from sheetpilot.app.version import __version__
-from sheetpilot.core.exceptions import BackupError, OutputCollisionError
+from sheetpilot.core.exceptions import BackupError, OutputCollisionError, SheetPilotError
 from sheetpilot.security.hashing import FileFingerprint, fingerprint_file, verify_fingerprint
 from sheetpilot.security.path_guard import ensure_within, sanitize_filename
 
@@ -83,6 +83,32 @@ class BackupService:
             return BackupReceipt.model_validate_json(guarded.read_text(encoding="utf-8"))
         except (OSError, ValueError) as error:
             raise BackupError("The backup manifest is invalid.") from error
+
+    def list_verified_receipts(self, job_id: UUID) -> tuple[BackupReceipt, ...]:
+        """Load only intact receipts and backups contained in one trusted job directory."""
+        job_dir = ensure_within(self.backup_root / str(job_id), self.backup_root)
+        if not job_dir.is_dir():
+            return ()
+        receipts: list[BackupReceipt] = []
+        for manifest_path in sorted(job_dir.glob("*.manifest.json")):
+            try:
+                receipt = self.load_receipt(manifest_path)
+                guarded_backup = ensure_within(receipt.backup_path, job_dir)
+                guarded_manifest = ensure_within(receipt.manifest_path, job_dir)
+                expected_manifest = guarded_backup.with_suffix(
+                    f"{guarded_backup.suffix}.manifest.json"
+                )
+                if (
+                    receipt.job_id != job_id
+                    or guarded_manifest != manifest_path.resolve()
+                    or guarded_manifest != expected_manifest
+                ):
+                    raise BackupError("The backup manifest does not match its job or file.")
+                verify_fingerprint(guarded_backup, receipt.source_fingerprint)
+            except (OSError, SheetPilotError):
+                continue
+            receipts.append(receipt)
+        return tuple(receipts)
 
     def restore_to_new_file(self, receipt: BackupReceipt, destination: Path) -> Path:
         if destination.exists():

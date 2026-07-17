@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -72,6 +73,16 @@ class PreviewPage(QWidget):
         status_row.addWidget(self.status, 1)
         status_row.addWidget(self.diagnostic_button)
         layout.addLayout(status_row)
+
+        self.warning_heading = QLabel("Operation warnings")
+        self.warning_heading.setObjectName("sectionTitle")
+        self.warning_heading.setVisible(False)
+        layout.addWidget(self.warning_heading)
+        self.warning_list = QListWidget()
+        self.warning_list.setAccessibleName("Operation warning details")
+        self.warning_list.setMaximumHeight(105)
+        self.warning_list.setVisible(False)
+        layout.addWidget(self.warning_list)
 
         filters = QHBoxLayout()
         self.search = QLineEdit()
@@ -138,6 +149,9 @@ class PreviewPage(QWidget):
         self._plan = plan
         self._preview = None
         self.model.set_changes(())
+        self.warning_list.clear()
+        self.warning_list.setVisible(False)
+        self.warning_heading.setVisible(False)
         self.approval.setChecked(False)
         self.destructive_confirmation.setChecked(False)
         self.destructive_confirmation.setVisible(
@@ -193,6 +207,13 @@ class PreviewPage(QWidget):
             return
         self._preview = result
         self.model.set_changes(result.changes)
+        self.warning_list.clear()
+        for step in result.steps:
+            for warning in step.warnings:
+                self.warning_list.addItem(f"{step.step_id} · {step.operation}: {warning}")
+        has_warnings = self.warning_list.count() > 0
+        self.warning_heading.setVisible(has_warnings)
+        self.warning_list.setVisible(has_warnings)
         self.table.resizeColumnsToContents()
         warning_count = sum(len(step.warnings) for step in result.steps)
         sample_note = (

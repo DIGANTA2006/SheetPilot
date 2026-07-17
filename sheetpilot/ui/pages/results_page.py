@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 from PySide6.QtCore import QThreadPool, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
@@ -37,6 +38,7 @@ class ResultsPage(QWidget):
     back_requested = Signal()
     repeat_requested = Signal()
     execution_completed = Signal(object)
+    execution_failed = Signal(str)
 
     def __init__(
         self,
@@ -53,6 +55,7 @@ class ResultsPage(QWidget):
         self._execution_worker: ExecutionWorker | None = None
         self._restore_worker: RestoreWorker | None = None
         self._result: ExecutionResult | None = None
+        self._available_backups: tuple[BackupReceipt, ...] = ()
         self._diagnostic = ""
 
         layout = QVBoxLayout(self)
@@ -136,9 +139,20 @@ class ResultsPage(QWidget):
         approval: ExecutionApproval,
     ) -> None:
         self._result = None
+        self._available_backups = ()
         self.summary.setVisible(False)
         self.paths.setVisible(False)
         self.diagnostic_button.setVisible(False)
+        self.backup_choice.clear()
+        self.restore.setEnabled(True)
+        for widget in (
+            self.open_folder,
+            self.open_audit,
+            self.backup_choice,
+            self.restore,
+            self.repeat,
+        ):
+            widget.setVisible(False)
         self.back.setEnabled(False)
         self.progress.setVisible(True)
         self.progress.setValue(0)
@@ -160,7 +174,7 @@ class ResultsPage(QWidget):
         )
         self._execution_worker.signals.progress.connect(self._on_progress)
         self._execution_worker.signals.completed.connect(self._on_completed)
-        self._execution_worker.signals.failed.connect(self._on_failed)
+        self._execution_worker.signals.failed_with_backups.connect(self._on_failed_with_backups)
         self._execution_worker.signals.cancelled.connect(self._on_cancelled)
         self._thread_pool.start(self._execution_worker)
 
@@ -224,9 +238,7 @@ class ResultsPage(QWidget):
             f"Backup(s): {', '.join(str(item.backup_path) for item in result.backups)}"
         )
         self.paths.setVisible(True)
-        self.backup_choice.clear()
-        for index, receipt in enumerate(result.backups):
-            self.backup_choice.addItem(receipt.source_name, index)
+        self._set_available_backups(result.backups)
         for widget in (
             self.open_folder,
             self.open_audit,
@@ -238,15 +250,40 @@ class ResultsPage(QWidget):
         self.execution_completed.emit(result)
 
     def _on_failed(self, code: str, message: str, details: str) -> None:
+        self._on_failed_with_backups(code, message, details, ())
+
+    def _on_failed_with_backups(
+        self, code: str, message: str, details: str, backups: object
+    ) -> None:
         self.progress.setVisible(False)
         self.cancel_button.setVisible(False)
         self.back.setEnabled(True)
         self._diagnostic = f"Diagnostic code: {code}\nType: {details}"
         self.diagnostic_button.setVisible(True)
+        if isinstance(backups, tuple) and all(isinstance(item, BackupReceipt) for item in backups):
+            typed_backups = cast(tuple[BackupReceipt, ...], backups)
+        else:
+            typed_backups = ()
+        self._set_available_backups(typed_backups)
+        if typed_backups:
+            self.paths.setText(
+                "Verified backup(s) preserved after the failed execution:\n"
+                + "\n".join(str(item.backup_path) for item in typed_backups)
+            )
+            self.paths.setVisible(True)
+            self.backup_choice.setVisible(True)
+            self.restore.setVisible(True)
+            recovery = (
+                f" {len(typed_backups)} verified backup(s) remain available below; restore "
+                "always creates a new file."
+            )
+        else:
+            recovery = ""
         self.status.setText(
-            f"{message} Review the diagnostic code, then return to the preview or choose a "
-            "different output name."
+            f"{message}{recovery} Review the diagnostic code, then return to the preview or "
+            "choose a different output name."
         )
+        self.execution_failed.emit(code)
 
     def _on_cancelled(self) -> None:
         self.progress.setVisible(False)
@@ -263,12 +300,17 @@ class ResultsPage(QWidget):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._result.audit.path)))
 
     def _selected_backup(self) -> BackupReceipt | None:
-        if self._result is None:
-            return None
         index = self.backup_choice.currentData()
-        if not isinstance(index, int) or not (0 <= index < len(self._result.backups)):
+        if not isinstance(index, int) or not (0 <= index < len(self._available_backups)):
             return None
-        return self._result.backups[index]
+        return self._available_backups[index]
+
+    def _set_available_backups(self, backups: tuple[BackupReceipt, ...]) -> None:
+        self._available_backups = backups
+        self.backup_choice.clear()
+        for index, receipt in enumerate(backups):
+            created = receipt.created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+            self.backup_choice.addItem(f"{receipt.source_name} · {created}", index)
 
     def _restore_backup(self) -> None:
         receipt = self._selected_backup()

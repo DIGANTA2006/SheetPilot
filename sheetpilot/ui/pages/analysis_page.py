@@ -52,6 +52,7 @@ class AnalysisPage(QWidget):
         self._token: CancellationToken | None = None
         self._worker: AnalysisWorker | None = None
         self._diagnostic = ""
+        self._analysis_running = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(34, 28, 34, 28)
@@ -194,6 +195,12 @@ class AnalysisPage(QWidget):
         self.continue_button.setVisible(False)
 
     def add_files(self, paths: tuple[Path, ...]) -> None:
+        if self._analysis_running:
+            self.status_label.setText(
+                "Analysis is already running. Wait for it to finish or cancel before changing "
+                "the source files."
+            )
+            return
         existing = {str(path).casefold() for path in self._paths}
         rejected = 0
         added = 0
@@ -242,6 +249,8 @@ class AnalysisPage(QWidget):
             self._invalidate_analysis()
 
     def _set_running(self, running: bool) -> None:
+        self._analysis_running = running
+        self.setAcceptDrops(not running)
         for widget in (
             self.browse_button,
             self.remove_button,
@@ -341,9 +350,10 @@ class AnalysisPage(QWidget):
         if not self._profiles or not self._validate_intake():
             return
         deadline_text = self.deadline.text().strip()
-        output_format = self.output_format.currentData()
-        privacy_mode = self.privacy_mode.currentData()
-        if not isinstance(output_format, OutputFormat) or not isinstance(privacy_mode, PrivacyMode):
+        try:
+            output_format = OutputFormat(self.output_format.currentData())
+            privacy_mode = PrivacyMode(self.privacy_mode.currentData())
+        except (TypeError, ValueError):
             self.status_label.setText("The selected output or privacy mode is invalid.")
             return
         draft = JobDraft(
@@ -371,9 +381,22 @@ class AnalysisPage(QWidget):
         self._invalidate_analysis()
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
-        if event.mimeData().hasUrls() and all(url.isLocalFile() for url in event.mimeData().urls()):
+        if (
+            not self._analysis_running
+            and event.mimeData().hasUrls()
+            and all(url.isLocalFile() for url in event.mimeData().urls())
+        ):
             event.acceptProposedAction()
+        else:
+            event.ignore()
 
     def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802
+        if self._analysis_running:
+            self.status_label.setText(
+                "Analysis is already running. Wait for it to finish or cancel before changing "
+                "the source files."
+            )
+            event.ignore()
+            return
         self.add_files(tuple(Path(url.toLocalFile()) for url in event.mimeData().urls()))
         event.acceptProposedAction()

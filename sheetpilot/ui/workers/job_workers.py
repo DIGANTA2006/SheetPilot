@@ -25,6 +25,7 @@ class JobWorkerSignals(QObject):
     progress = Signal(int, str)
     completed = Signal(object)
     failed = Signal(str, str, str)
+    failed_with_backups = Signal(str, str, str, object)
     cancelled = Signal()
 
 
@@ -113,10 +114,22 @@ class ExecutionWorker(QRunnable):
         except UserCancelledError:
             self.signals.cancelled.emit()
         except BaseException as error:
-            _emit_failure(
-                self.signals,
-                error,
-                "Execution failed safely. Source files were not modified.",
+            try:
+                backups = BackupService(self.executor.config.backup_dir).list_verified_receipts(
+                    self.plan.job_id
+                )
+            except BaseException:
+                backups = ()
+            if isinstance(error, SheetPilotError):
+                code, message = error.code, str(error)
+            else:
+                code = "unexpected_job_error"
+                message = "Execution failed safely. Source files were not modified."
+            self.signals.failed_with_backups.emit(
+                code,
+                message,
+                type(error).__name__,
+                backups,
             )
 
 

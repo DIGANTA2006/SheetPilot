@@ -42,8 +42,18 @@ verified backups, isolated re-execution, validation and reconciliation, same-dir
 staging, reopen validation, no-overwrite publication, failed-artifact quarantine, and an
 aggregate-only JSON audit. A validation or audit failure never produces a completed job.
 
+Phase 5 provides the complete local desktop job flow: validated intake and background
+analysis, a registry-backed plan builder and strict JSON review, searchable before/after
+preview, individual value-change rejection, destructive-step confirmation, background
+transactional execution, reconciliation results, diagnostic details, and hash-verified
+backup restore. Long-running actions disable conflicting controls and offer safe
+cancellation at defined boundaries; once an atomic execution transaction begins, it is
+allowed to finish so a committed result is never hidden from the user.
+
 No cloud provider is required. The application starts in local/offline mode and the AI
-planner remains separate from the deterministic executor.
+planner remains separate from the deterministic executor. Saved-workflow screens,
+planner integration, optional Excel automation, and frozen packaging are tracked as later
+phases and are not described as complete here until their own gates and commits pass.
 
 ## Development setup
 
