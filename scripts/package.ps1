@@ -6,6 +6,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = (Resolve-Path -LiteralPath (Split-Path -Parent $PSScriptRoot)).Path
+$Python = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
 $VersionSource = Get-Content -LiteralPath (Join-Path $ProjectRoot 'sheetpilot\app\version.py') -Raw
 $VersionMatch = [regex]::Match($VersionSource, '__version__\s*=\s*"(?<version>\d+\.\d+\.\d+)"')
 if (-not $VersionMatch.Success) {
@@ -20,21 +21,34 @@ $ReleaseFolder = Join-Path $ReleaseRoot "SheetPilot-$Version-win64"
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
 
 $Executable = Join-Path $BuiltFolder 'SheetPilot.exe'
-$Smoke = Start-Process -FilePath $Executable -ArgumentList '--smoke-test' -PassThru -WindowStyle Hidden
-try {
-    if (-not $Smoke.WaitForExit(30000)) {
-        $Smoke.Kill()
-        $Smoke.WaitForExit()
-        throw 'Frozen startup smoke test exceeded the 30-second timeout.'
+function Invoke-FrozenSelfTest {
+    param(
+        [Parameter(Mandatory = $true)][string]$Argument,
+        [Parameter(Mandatory = $true)][string]$Label,
+        [int]$TimeoutMilliseconds = 60000
+    )
+    $Process = Start-Process -FilePath $Executable -ArgumentList $Argument -PassThru -WindowStyle Hidden
+    try {
+        if (-not $Process.WaitForExit($TimeoutMilliseconds)) {
+            $Process.Kill()
+            $Process.WaitForExit()
+            throw "$Label exceeded the $TimeoutMilliseconds millisecond timeout."
+        }
+        $ExitCode = $Process.ExitCode
     }
-    $SmokeExitCode = $Smoke.ExitCode
+    finally {
+        $Process.Dispose()
+    }
+    if ($ExitCode -ne 0) {
+        throw "$Label failed with exit code $ExitCode."
+    }
 }
-finally {
-    $Smoke.Dispose()
-}
-if ($SmokeExitCode -ne 0) {
-    throw "Frozen startup smoke test failed with exit code $SmokeExitCode."
-}
+
+Invoke-FrozenSelfTest -Argument '--smoke-test' -Label 'Frozen startup smoke test'
+Invoke-FrozenSelfTest -Argument '--workflow-self-test' -Label 'Frozen normal workflow self-test'
+Invoke-FrozenSelfTest `
+    -Argument '--invalid-workflow-self-test' `
+    -Label 'Frozen invalid workflow rejection self-test'
 
 New-Item -ItemType Directory -Path $ReleaseRoot -Force | Out-Null
 $ResolvedReleaseRoot = (Resolve-Path -LiteralPath $ReleaseRoot).Path
@@ -59,7 +73,25 @@ $ChecksumLines = Get-ChildItem -LiteralPath $CanonicalRelease -Recurse -File |
     }
 [System.IO.File]::WriteAllLines($ChecksumPath, $ChecksumLines, [System.Text.UTF8Encoding]::new($false))
 
+$ReleaseExecutable = Join-Path $CanonicalRelease 'SheetPilot.exe'
+$PreviousFrozenExecutable = $env:SHEETPILOT_FROZEN_EXE
+try {
+    $env:SHEETPILOT_FROZEN_EXE = $ReleaseExecutable
+    & $Python -m pytest tests\packaging\test_frozen_smoke.py -q
+    if ($LASTEXITCODE -ne 0) { throw 'Frozen release regression tests failed.' }
+}
+finally {
+    if ($null -eq $PreviousFrozenExecutable) {
+        Remove-Item Env:SHEETPILOT_FROZEN_EXE -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:SHEETPILOT_FROZEN_EXE = $PreviousFrozenExecutable
+    }
+}
+
 Write-Output "Frozen smoke test: passed"
+Write-Output "Frozen normal workflow self-test: passed"
+Write-Output "Frozen invalid workflow rejection self-test: passed"
 Write-Output "Release folder: $CanonicalRelease"
-Write-Output "Executable: $(Join-Path $CanonicalRelease 'SheetPilot.exe')"
+Write-Output "Executable: $ReleaseExecutable"
 Write-Output "Checksums: $ChecksumPath"

@@ -20,6 +20,49 @@ def test_version_and_smoke_test_are_mutually_exclusive() -> None:
         app_main.parse_arguments(["--version", "--smoke-test"])
 
 
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--smoke-test", "--workflow-self-test"],
+        ["--workflow-self-test", "--invalid-workflow-self-test"],
+        ["--version", "--invalid-workflow-self-test"],
+    ],
+)
+def test_all_self_test_modes_are_mutually_exclusive(arguments: list[str]) -> None:
+    with pytest.raises(SystemExit):
+        app_main.parse_arguments(arguments)
+
+
+@pytest.mark.parametrize(
+    ("argument", "runner_name"),
+    [
+        ("--workflow-self-test", "run_normal_workflow_self_test"),
+        ("--invalid-workflow-self-test", "run_invalid_workflow_self_test"),
+    ],
+)
+def test_workflow_self_tests_run_without_ui_or_user_data_initialization(
+    argument: str,
+    runner_name: str,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    def run_self_test() -> None:
+        events.append("self-test")
+
+    def reject_ui_initialization() -> None:
+        raise AssertionError(
+            "workflow self-tests must not initialize the normal application context"
+        )
+
+    monkeypatch.setattr(app_main.multiprocessing, "freeze_support", lambda: None)
+    monkeypatch.setattr(app_main, runner_name, run_self_test)
+    monkeypatch.setattr(app_main, "build_context", reject_ui_initialization)
+
+    assert app_main.main([argument]) == 0
+    assert events == ["self-test"]
+
+
 def test_smoke_test_composes_window_without_entering_event_loop(
     monkeypatch: MonkeyPatch,
 ) -> None:

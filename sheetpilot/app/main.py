@@ -10,6 +10,10 @@ from collections.abc import Sequence
 from PySide6.QtWidgets import QApplication, QWidget
 
 from sheetpilot.app.bootstrap import build_context, build_main_window
+from sheetpilot.app.workflow_self_test import (
+    run_invalid_workflow_self_test,
+    run_normal_workflow_self_test,
+)
 
 
 def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespace:
@@ -20,6 +24,16 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
         "--smoke-test",
         action="store_true",
         help="initialize the application and exit without entering the event loop",
+    )
+    launch_mode.add_argument(
+        "--workflow-self-test",
+        action="store_true",
+        help="run a disposable normal XLSX workflow and exit",
+    )
+    launch_mode.add_argument(
+        "--invalid-workflow-self-test",
+        action="store_true",
+        help="prove an unknown workflow is rejected without artifacts and exit",
     )
     return parser.parse_args(arguments)
 
@@ -40,6 +54,12 @@ def main(arguments: Sequence[str] | None = None) -> int:
         from sheetpilot.app.version import __version__
 
         print(__version__)
+        return 0
+    if options.workflow_self_test:
+        run_normal_workflow_self_test()
+        return 0
+    if options.invalid_workflow_self_test:
+        run_invalid_workflow_self_test()
         return 0
     application = QApplication.instance()
     if not isinstance(application, QApplication):

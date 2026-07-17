@@ -73,4 +73,3 @@ markers = [
 
 [tool.bandit]
 exclude_dirs = ["tests", ".venv", "build", "dist"]
-skips = ["B101"]

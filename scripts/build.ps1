@@ -17,6 +17,14 @@ $PythonVersion = & $Python -c "import sys; print(f'{sys.version_info.major}.{sys
 if ($LASTEXITCODE -ne 0 -or $PythonVersion.Trim() -ne '3.12') {
     throw "SheetPilot requires Python 3.12; the repository .venv reported $PythonVersion."
 }
+$Platform = & $Python -c "import sys; print(sys.platform)"
+if ($LASTEXITCODE -ne 0 -or $Platform.Trim() -ne 'win32') {
+    throw "SheetPilot Windows releases require Windows; the repository .venv reported $Platform."
+}
+$PythonBits = & $Python -c "import struct; print(struct.calcsize('P') * 8)"
+if ($LASTEXITCODE -ne 0 -or $PythonBits.Trim() -ne '64') {
+    throw "SheetPilot Windows releases require 64-bit Python; the repository .venv reported $PythonBits-bit."
+}
 
 if (-not $SkipSetup) {
     & (Join-Path $PSScriptRoot 'setup.ps1')

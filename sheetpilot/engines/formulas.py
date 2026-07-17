@@ -82,9 +82,12 @@ def render_formula(spec: GeneratedFormulaSpec, headers: list[str], row_number: i
         expression = f"{cells[0]}+{gst}" if spec.include_base else gst
     elif spec.kind == FormulaKind.DATE_DIFFERENCE:
         expression = f"{cells[1]}-{cells[0]}"
-    else:
-        assert spec.as_of is not None
+    elif spec.kind == FormulaKind.AGE:
+        if spec.as_of is None:
+            raise InvalidPlanError("Age formulas require an explicit as-of date.")
         expression = (
             f'DATEDIF({cells[0]},DATE({spec.as_of.year},{spec.as_of.month},{spec.as_of.day}),"Y")'
         )
+    else:
+        raise InvalidPlanError(f"Unsupported formula kind: {spec.kind}")
     return f"={expression}"

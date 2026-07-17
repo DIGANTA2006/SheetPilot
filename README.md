@@ -80,15 +80,23 @@ unknown macro or client workbook is ever run.
 
 No cloud provider is required. The application starts in local/offline mode and the AI
 planner remains separate from the deterministic executor. Excel is optional and local
-processing remains usable when it is absent. Frozen packaging is the remaining phase and
-is not described as complete until its build and executable tests pass.
+processing remains usable when it is absent. Packaging evidence below does not replace the
+manual clean-machine checklist required before any production-readiness claim.
+
+Phase 9 provides an exact Windows 64-bit dependency lock, consistent application and PE
+version metadata, a UPX-free PyInstaller one-folder build, generated icon resources,
+release checksums, and frozen startup, normal-workflow, and invalid-workflow self-tests.
+The normal frozen test executes a disposable XLSX transaction and verifies source
+preservation, backup manifests, atomic output, reopen validation, reconciliation, and the
+aggregate audit. The invalid test proves an unknown operation creates no output, backup,
+or audit artifact.
 
 ## Development setup
 
-The project requires Python 3.12 and uses the repository `.venv`.
+The project requires 64-bit Python 3.12 on Windows and uses the repository `.venv`.
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\scripts\setup.ps1
 .\.venv\Scripts\python.exe -m sheetpilot.app.main
 ```
 
@@ -101,6 +109,33 @@ Quality checks:
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe -m bandit -c pyproject.toml -r sheetpilot
 ```
+
+## Windows one-folder package
+
+Run the locked quality gate, build, executable self-tests, PE/version checks, and checksum
+generation with:
+
+```powershell
+.\scripts\package.ps1
+```
+
+The development build is written to `dist\SheetPilot\SheetPilot.exe`. The versioned
+checksum-bearing release is written to
+`release\SheetPilot-0.1.0-win64\SheetPilot.exe`; distribute the complete folder, not the
+executable alone.
+
+## Known limitations
+
+- A separate clean Windows machine without Python has not yet completed the manual release
+  checklist, so this repository should not be described as production-ready.
+- No remote planning provider or credential adapter is bundled. The offline rule parser
+  intentionally supports only documented cleaning, sorting, and exact-duplicate clauses.
+- Real Excel recalculation and PDF export are exercised on this development machine.
+  Approved pivot and trusted-macro paths are covered with controlled fakes and synthetic
+  macro-preservation fixtures; no real macro was executed.
+- Advanced Excel COM actions are currently a typed service API rather than a dedicated
+  desktop screen. All normal CSV/XLSX processing remains available without Excel.
+- Legacy `.xls`, `.xlsb`, `.ods`, scanned PDFs/OCR, and browser automation are deferred.
 
 ## Safety boundary
 
