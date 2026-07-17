@@ -185,6 +185,12 @@ class ApprovedPlan(FrozenStrictModel):
     plan_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
     approved_at: datetime
 
+    @model_validator(mode="after")
+    def digest_matches_plan(self) -> ApprovedPlan:
+        if self.plan_digest != plan_digest(self.plan):
+            raise ValueError("approved-plan digest does not match its plan")
+        return self
+
 
 def planning_source_from_profile(
     profile: FileProfile, *, source_id: UUID | None = None

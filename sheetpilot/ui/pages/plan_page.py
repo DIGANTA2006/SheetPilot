@@ -26,7 +26,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from sheetpilot.core.exceptions import SheetPilotError
+from sheetpilot.ai.models import (
+    ApprovedPlan,
+    PlanApproval,
+    PlanningRequest,
+    PlanProposal,
+    plan_digest,
+    planning_source_from_profile,
+)
+from sheetpilot.ai.planner import RuleBasedPlanner, approve_plan
+from sheetpilot.core.exceptions import InvalidPlanError, SheetPilotError
 from sheetpilot.core.operation_registry import OperationRegistry
 from sheetpilot.core.plan_schema import OperationPlan, PlanStep, RiskLevel, StepTarget
 from sheetpilot.core.plan_validator import PlanValidator
@@ -44,6 +53,10 @@ class PlanPage(QWidget):
         self._registry = registry
         self._prepared: PreparedJob | None = None
         self._diagnostic = ""
+        self._proposal: PlanProposal | None = None
+        self._approved_plan: ApprovedPlan | None = None
+        self._proposal_instruction = ""
+        self._setting_plan_editor = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(34, 28, 34, 28)
@@ -60,6 +73,35 @@ class PlanPage(QWidget):
         self.instruction_summary.setObjectName("instructionCard")
         layout.addWidget(self.instruction_summary)
 
+        local_planner = QGroupBox("Offline instruction planner")
+        local_planner_layout = QVBoxLayout(local_planner)
+        vocabulary = QLabel(
+            "Local vocabulary: trim/strip text, collapse spaces, normalize text case, "
+            "sort one named column, or mark/remove exact duplicates. Separate steps with "
+            '"then", a semicolon, or a new line.'
+        )
+        vocabulary.setWordWrap(True)
+        vocabulary.setObjectName("localPlannerVocabulary")
+        local_planner_layout.addWidget(vocabulary)
+        self.local_instruction = QPlainTextEdit()
+        self.local_instruction.setMaximumHeight(72)
+        self.local_instruction.setAccessibleName("Instruction for offline rule-based planning")
+        self.local_instruction.textChanged.connect(self._planner_instruction_changed)
+        local_planner_layout.addWidget(self.local_instruction)
+        local_actions = QHBoxLayout()
+        self.generate_local_plan = QPushButton("Generate with local rules")
+        self.generate_local_plan.clicked.connect(self._generate_local_plan)
+        self.provider_status = QLabel(
+            "Provider-backed planning is unavailable because no provider is configured; "
+            "nothing will be uploaded."
+        )
+        self.provider_status.setWordWrap(True)
+        self.provider_status.setObjectName("providerStatus")
+        local_actions.addWidget(self.generate_local_plan)
+        local_actions.addWidget(self.provider_status, 1)
+        local_planner_layout.addLayout(local_actions)
+        layout.addWidget(local_planner)
+
         splitter = QSplitter()
         builder = QGroupBox("Add a registered operation")
         builder_layout = QVBoxLayout(builder)
@@ -72,6 +114,7 @@ class PlanPage(QWidget):
         self.source.currentIndexChanged.connect(self._source_changed)
         form.addRow("Source", self.source)
         self.sheet = QComboBox()
+        self.sheet.currentTextChanged.connect(self._sheet_changed)
         form.addRow("Sheet", self.sheet)
         self.target_columns = QLineEdit()
         self.target_columns.setPlaceholderText("Optional comma-separated review metadata")
@@ -108,10 +151,22 @@ class PlanPage(QWidget):
         review_layout.addWidget(QLabel("Validated plan JSON (review or edit)"))
         self.plan_editor = QPlainTextEdit()
         self.plan_editor.setAccessibleName("Operation plan JSON")
+        self.plan_editor.textChanged.connect(self._plan_editor_changed)
         review_layout.addWidget(self.plan_editor, 1)
         self.plan_status = QLabel()
         self.plan_status.setWordWrap(True)
         review_layout.addWidget(self.plan_status)
+        approval_row = QHBoxLayout()
+        self.approve_generated_plan = QPushButton("Approve reviewed generated plan")
+        self.approve_generated_plan.setEnabled(False)
+        self.approve_generated_plan.clicked.connect(self._approve_generated_plan)
+        self.generated_approval_status = QLabel(
+            "Manual plans are reviewed through validation and preview."
+        )
+        self.generated_approval_status.setWordWrap(True)
+        approval_row.addWidget(self.approve_generated_plan)
+        approval_row.addWidget(self.generated_approval_status, 1)
+        review_layout.addLayout(approval_row)
         splitter.addWidget(review)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 2)
@@ -138,20 +193,150 @@ class PlanPage(QWidget):
 
     def load_job(self, prepared: PreparedJob) -> None:
         self._prepared = prepared
+        self._proposal = None
+        self._approved_plan = None
+        self._proposal_instruction = ""
+        self.approve_generated_plan.setEnabled(False)
+        self.generated_approval_status.setText(
+            "Manual plans are reviewed through validation and preview."
+        )
         self.instruction_summary.setText(
             f"Client request: {prepared.draft.instructions}\n"
             "Planning mode: local/manual — no client data will be uploaded."
         )
+        self.local_instruction.setPlainText(prepared.draft.instructions)
         self.source.clear()
         for source in prepared.plan.source_files:
             self.source.addItem(source.file_name, str(source.source_id))
-        self.plan_editor.setPlainText(prepared.plan.model_dump_json(indent=2))
+        self._set_plan_editor(prepared.plan)
         self._source_changed(self.source.currentIndex())
         self._refresh_steps(prepared.plan)
         self.plan_status.setText(
             "Analysis is complete. Add at least one operation, then validate the plan."
         )
         self.diagnostic_button.setVisible(False)
+
+    def _set_plan_editor(self, plan: OperationPlan) -> None:
+        self._setting_plan_editor = True
+        try:
+            self.plan_editor.setPlainText(plan.model_dump_json(indent=2))
+        finally:
+            self._setting_plan_editor = False
+
+    def _planning_request(self) -> PlanningRequest:
+        if self._prepared is None:
+            raise ValueError("No analysed job is loaded.")
+        instruction = self.local_instruction.toPlainText().strip()
+        if not instruction:
+            raise ValueError("Enter an instruction for the local planner.")
+        if len(self._prepared.bindings) != len(self._prepared.draft.profiles):
+            raise ValueError("Analysed source bindings no longer match their profiles.")
+        profiles_by_source = {
+            binding.source_id: profile
+            for binding, profile in zip(
+                self._prepared.bindings,
+                self._prepared.draft.profiles,
+                strict=True,
+            )
+        }
+        contexts = []
+        for reference in self._prepared.plan.source_files:
+            try:
+                profile = profiles_by_source[reference.source_id]
+            except KeyError as error:
+                raise ValueError("An analysed source is missing its aggregate profile.") from error
+            context = planning_source_from_profile(profile, source_id=reference.source_id)
+            if context.reference != reference:
+                raise ValueError("Planner metadata no longer matches the analysed source.")
+            contexts.append(context)
+        source_value = self.source.currentData()
+        if source_value is None:
+            raise ValueError("Select an analysed source for local planning.")
+        default_source_id = UUID(str(source_value))
+        default_sheet = self.sheet.currentText() or None
+        return PlanningRequest(
+            job_id=self._prepared.plan.job_id,
+            job_name=self._prepared.plan.job_name,
+            instruction=instruction,
+            sources=tuple(contexts),
+            output=self._prepared.plan.output,
+            privacy=self._prepared.plan.privacy,
+            default_source_id=default_source_id,
+            default_sheet=default_sheet,
+            created_at=self._prepared.plan.created_at,
+        )
+
+    def _generate_local_plan(self) -> None:
+        try:
+            request = self._planning_request()
+            proposal = RuleBasedPlanner(self._registry).plan(request)
+        except (SheetPilotError, ValidationError, ValueError) as error:
+            self._show_error("Local planning failed.", error)
+            return
+        self._proposal = proposal
+        self._approved_plan = None
+        self._proposal_instruction = request.instruction
+        self._set_plan_editor(proposal.plan)
+        self._refresh_steps(proposal.plan)
+        self.approve_generated_plan.setEnabled(True)
+        self.generated_approval_status.setText(
+            f"Generated locally · digest {proposal.plan_digest[:12]}… · review required."
+        )
+        self.plan_status.setText(
+            f"Local rules generated {len(proposal.plan.steps)} restricted step(s). "
+            "Review the JSON, then explicitly approve it before preview."
+        )
+        self._diagnostic = ""
+        self.diagnostic_button.setVisible(False)
+
+    def _approve_generated_plan(self) -> None:
+        try:
+            if self._proposal is None:
+                raise InvalidPlanError("There is no generated plan awaiting approval.")
+            if self.local_instruction.toPlainText().strip() != self._proposal_instruction:
+                raise InvalidPlanError(
+                    "The instruction changed after generation; generate a new local plan."
+                )
+            reviewed = self._parse_plan()
+            reviewed_digest = plan_digest(reviewed)
+            if reviewed_digest != self._proposal.plan_digest:
+                raise InvalidPlanError(
+                    "The generated plan changed after review began; generate it again."
+                )
+            approved = approve_plan(
+                self._proposal,
+                PlanApproval(plan_digest=reviewed_digest, approved=True),
+            )
+        except (SheetPilotError, ValidationError, ValueError) as error:
+            self._approved_plan = None
+            self._show_error("Generated-plan approval failed.", error)
+            return
+        self._approved_plan = approved
+        self.generated_approval_status.setText(
+            f"Approved for preview · digest {approved.plan_digest[:12]}…"
+        )
+        self.plan_status.setText(
+            "The reviewed local plan is digest-bound and approved for safe preview."
+        )
+        self._diagnostic = ""
+        self.diagnostic_button.setVisible(False)
+
+    def _plan_editor_changed(self) -> None:
+        if self._setting_plan_editor or self._proposal is None:
+            return
+        self._approved_plan = None
+        self.generated_approval_status.setText(
+            "Plan JSON changed · prior approval is invalid. Review and approve again."
+        )
+
+    def _planner_instruction_changed(self) -> None:
+        if self._proposal is None:
+            return
+        self._approved_plan = None
+        self.approve_generated_plan.setEnabled(False)
+        self.generated_approval_status.setText(
+            "Instruction changed · generate a new local plan before approval."
+        )
 
     def _operation_changed(self, name: str) -> None:
         if not name:
@@ -183,6 +368,9 @@ class PlanPage(QWidget):
         )
         if source is not None:
             self.sheet.addItems(source.sheet_names)
+        self._operation_changed(self.operation.currentText())
+
+    def _sheet_changed(self, _name: str) -> None:
         self._operation_changed(self.operation.currentText())
 
     def _first_selected_column(self) -> str | None:
@@ -301,8 +489,25 @@ class PlanPage(QWidget):
 
     def _request_preview(self) -> None:
         plan = self.validate_plan()
-        if plan is not None:
+        if plan is None:
+            return
+        if self._proposal is None:
             self.preview_requested.emit(plan)
+            return
+        try:
+            if self._approved_plan is None:
+                raise InvalidPlanError(
+                    "A locally generated plan requires explicit approval before preview."
+                )
+            if plan_digest(plan) != self._approved_plan.plan_digest:
+                self._approved_plan = None
+                raise InvalidPlanError(
+                    "The generated plan changed after approval; review and approve it again."
+                )
+        except InvalidPlanError as error:
+            self._show_error("Preview is blocked.", error)
+            return
+        self.preview_requested.emit(self._approved_plan.plan)
 
     def _refresh_steps(self, plan: OperationPlan) -> None:
         self.steps_table.setRowCount(len(plan.steps))

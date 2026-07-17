@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
 from sheetpilot.ai.models import (
     ApprovedPlan,
     PlanApproval,
@@ -38,6 +40,53 @@ class PlanningProviderError(SheetPilotError):
     code = "planning_provider_error"
 
 
+_SINGLE_COLUMN_PARAMETER_KEYS = frozenset(
+    {
+        "base_column",
+        "birth_date_column",
+        "category_column",
+        "column",
+        "end_column",
+        "price_column",
+        "quantity_column",
+        "start_column",
+        "value_column",
+    }
+)
+_MULTIPLE_COLUMN_PARAMETER_KEYS = frozenset({"columns", "group_by", "keys", "order_by"})
+
+
+def _parameter_column_references(operation: str, parameters: Mapping[str, object]) -> set[str]:
+    """Extract existing-column references from one already schema-validated parameter tree."""
+    references: set[str] = set()
+
+    def visit(value: object) -> None:
+        if isinstance(value, Mapping):
+            action_kind = value.get("kind")
+            if operation == "column.transform" and action_kind == "rename":
+                rename_mapping = value.get("mapping")
+                if isinstance(rename_mapping, Mapping):
+                    references.update(str(column) for column in rename_mapping)
+            for key, nested in value.items():
+                key_text = str(key)
+                if key_text in _SINGLE_COLUMN_PARAMETER_KEYS and isinstance(nested, str):
+                    references.add(nested)
+                elif key_text in _MULTIPLE_COLUMN_PARAMETER_KEYS and isinstance(nested, Sequence):
+                    references.update(item for item in nested if isinstance(item, str))
+                elif (
+                    (key_text == "source" and operation == "column.transform")
+                    or (key_text == "source_column" and operation == "calculate.column")
+                ) and isinstance(nested, str):
+                    references.add(nested)
+                visit(nested)
+        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            for nested in value:
+                visit(nested)
+
+    visit(parameters)
+    return references
+
+
 def _validate_targets(request: PlanningRequest, response: PlannerResponse) -> None:
     by_source = {source.reference.source_id: source for source in request.sources}
     for step in response.steps:
@@ -54,11 +103,31 @@ def _validate_targets(request: PlanningRequest, response: PlannerResponse) -> No
             if not sheets:
                 raise InvalidPlanError("A plan step targets an unanalysed sheet.")
         for sheet in sheets:
-            if sheet.duplicate_headers and step.target.columns:
+            parameter_columns = _parameter_column_references(step.operation, step.parameters)
+            if sheet.duplicate_headers and (step.target.columns or parameter_columns):
                 raise InvalidPlanError("A plan step cannot target unresolved duplicate headers.")
             unknown_columns = set(step.target.columns) - set(sheet.headers)
             if unknown_columns:
                 raise InvalidPlanError("A plan step targets an unanalysed column.")
+            unknown_parameter_columns = parameter_columns - set(sheet.headers)
+            if unknown_parameter_columns:
+                raise InvalidPlanError(
+                    "Operation parameters reference an unanalysed column: "
+                    + ", ".join(sorted(unknown_parameter_columns))
+                )
+    for rule in response.validations:
+        rule_columns = _parameter_column_references(
+            "quality.validate", {"kind": rule.name, **rule.parameters}
+        )
+        if not rule_columns:
+            continue
+        _, sheet = request.default_target()
+        unknown_rule_columns = rule_columns - set(sheet.headers)
+        if unknown_rule_columns:
+            raise InvalidPlanError(
+                "A validation rule references an unanalysed column: "
+                + ", ".join(sorted(unknown_rule_columns))
+            )
 
 
 def _assemble_plan(request: PlanningRequest, response: PlannerResponse) -> OperationPlan:
@@ -82,9 +151,9 @@ def _proposal(
     origin: PlanningOrigin,
     provider_id: str | None = None,
 ) -> PlanProposal:
-    _validate_targets(request, response)
     plan = _assemble_plan(request, response)
     PlanValidator(registry).validate(plan)
+    _validate_targets(request, response)
     return PlanProposal(
         plan=plan,
         origin=origin,
@@ -97,11 +166,13 @@ def approve_plan(proposal: PlanProposal, approval: PlanApproval) -> ApprovedPlan
     """Return an approved wrapper only for an affirmative, matching human decision."""
     if not approval.approved:
         raise InvalidPlanError("The generated plan was not approved.")
-    if approval.plan_digest != proposal.plan_digest:
+    current_digest = plan_digest(proposal.plan)
+    if current_digest != proposal.plan_digest or approval.plan_digest != current_digest:
         raise InvalidPlanError("The plan changed after review; approval is no longer valid.")
+    plan_snapshot = OperationPlan.model_validate_json(proposal.plan.model_dump_json())
     return ApprovedPlan(
-        plan=proposal.plan,
-        plan_digest=proposal.plan_digest,
+        plan=plan_snapshot,
+        plan_digest=current_digest,
         approved_at=approval.approved_at,
     )
 

@@ -315,6 +315,69 @@ def test_plan_approval_rejects_a_different_digest() -> None:
         approve_plan(proposal, PlanApproval(plan_digest="f" * 64, approved=True))
 
 
+def test_plan_approval_rejects_nested_plan_mutation_after_review() -> None:
+    proposal = RuleBasedPlanner(build_default_registry()).plan(make_request("Sort by Created"))
+    proposal.plan.steps[0].parameters["keys"] = [
+        {"column": "Name", "descending": False, "nulls_last": True}
+    ]
+
+    with pytest.raises(InvalidPlanError, match="changed after review"):
+        approve_plan(
+            proposal,
+            PlanApproval(plan_digest=proposal.plan_digest, approved=True),
+        )
+
+
+def test_approved_plan_is_detached_from_later_proposal_mutation() -> None:
+    proposal = RuleBasedPlanner(build_default_registry()).plan(make_request("Sort by Created"))
+    approved = approve_plan(
+        proposal,
+        PlanApproval(plan_digest=proposal.plan_digest, approved=True),
+    )
+
+    proposal.plan.steps[0].parameters["keys"] = [
+        {"column": "Name", "descending": False, "nulls_last": True}
+    ]
+
+    assert approved.plan.steps[0].parameters["keys"][0]["column"] == "Created"
+
+
+def test_provider_parameter_columns_must_exist_in_analysed_sheet() -> None:
+    request = ai_request()
+    provider = FakeProvider(
+        response_json(
+            request,
+            column="Name",
+            parameters={"columns": ["Missing"], "actions": [{"kind": "trim"}]},
+        )
+    )
+    planner = AIPlanner(build_default_registry(), provider)
+    prepared = planner.prepare(request)
+
+    with pytest.raises(InvalidPlanError, match="parameters reference an unanalysed column"):
+        planner.generate(prepared, approve_provider_disclosure(prepared, approved=True))
+
+
+def test_provider_validation_columns_must_exist_in_analysed_sheet() -> None:
+    request = ai_request()
+    provider = FakeProvider(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "steps": [],
+                "validations": [
+                    {"name": "required_fields", "parameters": {"columns": ["Missing"]}}
+                ],
+            }
+        )
+    )
+    planner = AIPlanner(build_default_registry(), provider)
+    prepared = planner.prepare(request)
+
+    with pytest.raises(InvalidPlanError, match="validation rule references an unanalysed column"):
+        planner.generate(prepared, approve_provider_disclosure(prepared, approved=True))
+
+
 def test_local_provider_can_run_offline_without_upload_consent() -> None:
     request = make_request("Trim Name")
     provider = FakeProvider(response_json(request), remote=False)

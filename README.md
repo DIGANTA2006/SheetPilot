@@ -58,10 +58,19 @@ provides saved-workflow, template, history, validation, settings, and offline he
 Successful plans can be saved without client paths, hashes, rows, or upload consents, then
 rebound to newly analysed files and reviewed through the same preview and approval flow.
 
+Phase 7 adds an offline instruction planner for an intentionally small, documented
+vocabulary of text cleaning, sorting, and exact duplicate handling. Generated proposals
+contain restricted schema-validated JSON only, stay separate from execution, remain bound
+to analysed source identities, and require explicit digest-bound human approval before
+preview. The provider abstraction, bounded JSON parser, metadata disclosure manifest,
+redaction, and consent gates are implemented and tested; no remote provider or credential
+is bundled, so provider-backed planning is visibly unavailable and local/manual planning
+continues to work without internet access.
+
 No cloud provider is required. The application starts in local/offline mode and the AI
-planner remains separate from the deterministic executor. Planner integration, optional
-Excel automation, and frozen packaging are tracked as later phases and are not described
-as complete here until their own gates and commits pass.
+planner remains separate from the deterministic executor. Optional Excel automation and
+frozen packaging are tracked as later phases and are not described as complete here until
+their own gates and commits pass.
 
 ## Development setup
 
