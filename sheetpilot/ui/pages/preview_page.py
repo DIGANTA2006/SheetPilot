@@ -33,6 +33,7 @@ class PreviewPage(QWidget):
     back_requested = Signal()
     execute_requested = Signal(object)
     preview_completed = Signal(object)
+    busy_changed = Signal(bool)
 
     def __init__(
         self,
@@ -48,6 +49,7 @@ class PreviewPage(QWidget):
         self._token: CancellationToken | None = None
         self._worker: PreviewWorker | None = None
         self._diagnostic = ""
+        self._preview_running = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(34, 28, 34, 28)
@@ -186,12 +188,16 @@ class PreviewPage(QWidget):
             self.status.setText("Cancelling preview safely…")
 
     def _set_running(self, running: bool) -> None:
+        changed = self._preview_running != running
+        self._preview_running = running
         self.progress.setVisible(running)
         self.cancel_button.setVisible(running)
         self.cancel_button.setEnabled(running)
         self.back_button.setEnabled(not running)
         if running:
             self.execute_button.setEnabled(False)
+        if changed:
+            self.busy_changed.emit(running)
 
     def _on_progress(self, percent: int, label: str) -> None:
         self.progress.setValue(percent)

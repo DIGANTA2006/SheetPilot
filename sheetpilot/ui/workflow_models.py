@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from sheetpilot.core.plan_schema import (
@@ -16,6 +17,7 @@ from sheetpilot.core.plan_schema import (
 )
 from sheetpilot.core.preview_engine import SourceBinding
 from sheetpilot.core.profile_models import FileProfile
+from sheetpilot.storage.models import WorkflowTemplate
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +42,14 @@ class PreparedJob:
     draft: JobDraft
     plan: OperationPlan
     bindings: tuple[SourceBinding, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowRunRequest:
+    """A saved blueprint and user-reviewed parameter values awaiting new sources."""
+
+    template: WorkflowTemplate
+    parameter_values: dict[str, Any]
 
 
 def prepare_job(draft: JobDraft) -> PreparedJob:

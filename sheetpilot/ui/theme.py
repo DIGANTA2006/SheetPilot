@@ -7,6 +7,12 @@ QFrame#sidebar QLabel { background: transparent; color: #b8c5de; }
 QLabel#productName { color: white; font-size: 23px; font-weight: 700; }
 QLabel#workflowStage { padding: 11px 9px; border-radius: 7px; color: #9fb0cf; }
 QLabel#workflowStage[active="true"] { background: #233764; color: white; font-weight: 600; }
+QPushButton#navButton {
+    background: transparent; border: 0; color: #b8c5de; text-align: left;
+    padding: 7px 9px;
+}
+QPushButton#navButton:hover { background: #1b2c50; color: white; }
+QPushButton#navButton:checked { background: #233764; color: white; font-weight: 600; }
 QLabel#privacyBadge {
     padding: 10px; border: 1px solid #315486; border-radius: 8px; color: #a7d5c0;
 }

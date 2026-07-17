@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -8,13 +10,16 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import ValidationError
 
+from sheetpilot.core.exceptions import StorageError
 from sheetpilot.core.plan_schema import (
     OperationPlan,
     OutputSettings,
     PlanStep,
     PrivacyMetadata,
+    PrivacyMode,
     SourceReference,
     StepTarget,
+    ValidationRule,
 )
 from sheetpilot.operations.registry import build_default_registry
 from sheetpilot.operations.validation import (
@@ -28,7 +33,11 @@ from sheetpilot.storage.models import (
     JobHistoryRecord,
     JobStatus,
     SettingKey,
+    TemplateBindingLocation,
+    TemplateParameterBinding,
+    TemplateParameterKind,
     ValidationResult,
+    ValidationSummary,
 )
 from sheetpilot.storage.repositories import (
     JobHistoryRepository,
@@ -39,7 +48,15 @@ from sheetpilot.storage.repositories import (
 from sheetpilot.storage.services import JobHistoryService, WorkflowTemplateService
 
 
-def _plan(*, source_name: str = "client.csv", digest: str = "a" * 64) -> OperationPlan:
+def _plan(
+    *,
+    source_name: str = "client.csv",
+    digest: str = "a" * 64,
+    step_id: str = "clean-names",
+    actions: list[dict[str, object]] | None = None,
+    validations: list[ValidationRule] | None = None,
+    privacy: PrivacyMetadata | None = None,
+) -> OperationPlan:
     source_id = uuid4()
     return OperationPlan(
         job_name="Customer cleanup",
@@ -53,19 +70,23 @@ def _plan(*, source_name: str = "client.csv", digest: str = "a" * 64) -> Operati
         ],
         steps=[
             PlanStep(
-                step_id="clean-names",
+                step_id=step_id,
                 operation="text.clean",
-                parameters={"columns": ["Name"], "actions": [{"kind": "trim"}]},
+                parameters={
+                    "columns": ["Name"],
+                    "actions": actions or [{"kind": "trim"}],
+                },
                 target=StepTarget(source_id=source_id, sheet="CSV", columns=["Name"]),
                 explanation="Trim selected name values",
             )
         ],
+        validations=validations or [],
         output=OutputSettings(
             output_name="cleaned",
             format="csv",
             preserve_formatting=False,
         ),
-        privacy=PrivacyMetadata(),
+        privacy=privacy or PrivacyMetadata(),
     )
 
 
@@ -119,6 +140,168 @@ def test_template_is_file_independent_and_instantiates_fresh_plan(database: Data
     assert repeated.output.output_name == "next-cleaned"
 
 
+def test_template_resets_one_job_ai_consent(database: Database) -> None:
+    templates = WorkflowTemplateRepository(database)
+    service = WorkflowTemplateService(
+        build_default_registry(), templates, JobHistoryRepository(database)
+    )
+    plan = _plan(
+        privacy=PrivacyMetadata(
+            mode=PrivacyMode.AI_ASSISTED,
+            metadata_upload_consent=True,
+            raw_data_upload_consent=True,
+        )
+    )
+
+    template = service.save_validated(plan, name="Privacy-safe cleanup")
+
+    assert template.privacy == PrivacyMetadata()
+    rebound = service.create_plan(
+        template.workflow_id,
+        {
+            "source_1": SourceReference(
+                file_name="new.csv",
+                sha256="b" * 64,
+                sheet_names=["CSV"],
+            )
+        },
+    )
+    assert rebound.privacy == PrivacyMetadata()
+    with database.connect() as connection:
+        stored = json.loads(
+            str(
+                connection.execute(
+                    "SELECT plan_json FROM workflow_templates WHERE workflow_id = ?",
+                    (str(template.workflow_id),),
+                ).fetchone()[0]
+            )
+        )
+    assert stored["privacy"] == {
+        "mode": "local",
+        "metadata_upload_consent": False,
+        "raw_data_upload_consent": False,
+    }
+
+
+def test_generated_template_parameters_are_safe_typed_and_rebind_nested_values(
+    database: Database,
+) -> None:
+    plan = _plan(
+        step_id="123-Clean",
+        actions=[
+            {
+                "kind": "mapping_replace",
+                "mapping": {"Old": "Original"},
+            }
+        ],
+        validations=[
+            ValidationRule(
+                name="allowed_values",
+                parameters={"column": "Status", "values": ["Open", "Closed"]},
+            )
+        ],
+    )
+    source_id = plan.source_files[0].source_id
+    plan.steps.append(
+        PlanStep(
+            step_id="123_Clean",
+            operation="table.split_by_category",
+            parameters={
+                "category_column": "Category",
+                "table_prefix": "",
+                "include_blank": True,
+                "drop_category_column": False,
+                "max_tables": 20,
+            },
+            target=StepTarget(source_id=source_id, sheet="CSV", columns=["Category"]),
+            explanation="Split the table by an approved grouping column",
+        )
+    )
+    service = WorkflowTemplateService(
+        build_default_registry(),
+        WorkflowTemplateRepository(database),
+        JobHistoryRepository(database),
+    )
+
+    template = service.save_validated(plan, name="Parameterized cleanup")
+
+    keys = [parameter.key for parameter in template.parameters]
+    assert len(keys) == len(set(keys))
+    assert all(re.fullmatch(r"[a-z][a-z0-9_]{0,79}", key) for key in keys)
+    output_parameter = next(
+        parameter
+        for parameter in template.parameters
+        if parameter.kind == TemplateParameterKind.OUTPUT_NAME
+    )
+    mapping_parameter = next(
+        parameter
+        for parameter in template.parameters
+        if parameter.kind == TemplateParameterKind.MAPPING
+    )
+    grouping_parameter = next(
+        parameter
+        for parameter in template.parameters
+        if parameter.binding.location == TemplateBindingLocation.STEP_PARAMETER
+        and parameter.binding.step_id == "123_Clean"
+    )
+    validation_column = next(
+        parameter
+        for parameter in template.parameters
+        if parameter.binding.location == TemplateBindingLocation.VALIDATION_PARAMETER
+        and parameter.kind == TemplateParameterKind.COLUMN
+    )
+    validation_values = next(
+        parameter
+        for parameter in template.parameters
+        if parameter.binding.location == TemplateBindingLocation.VALIDATION_PARAMETER
+        and parameter.kind == TemplateParameterKind.JSON
+    )
+    assert output_parameter.default_value == "cleaned"
+    sheet_defaults = {
+        parameter.default_value
+        for parameter in template.parameters
+        if parameter.binding.location == TemplateBindingLocation.STEP_SHEET
+    }
+    target_defaults = [
+        parameter.default_value
+        for parameter in template.parameters
+        if parameter.binding.location == TemplateBindingLocation.STEP_COLUMNS
+    ]
+    assert sheet_defaults == {"CSV"}
+    assert ["Name"] in target_defaults
+    assert ["Category"] in target_defaults
+    assert mapping_parameter.default_value == {"Old": "Original"}
+    assert mapping_parameter.binding.parameter_path == ("actions", 0, "mapping")
+    assert grouping_parameter.default_value == "Category"
+    assert validation_column.default_value == "Status"
+    assert validation_values.default_value == ["Open", "Closed"]
+
+    repeated = service.create_plan(
+        template.workflow_id,
+        {
+            "source_1": SourceReference(
+                file_name="replacement.csv",
+                sha256="c" * 64,
+                sheet_names=["CSV"],
+            )
+        },
+        {
+            output_parameter.key: "repeated-output",
+            mapping_parameter.key: {"New": "Replacement"},
+            grouping_parameter.key: "District",
+            validation_column.key: "State",
+            validation_values.key: ["Active", "Closed"],
+        },
+    )
+    assert repeated.output.output_name == "repeated-output"
+    assert repeated.steps[0].parameters["actions"][0]["mapping"] == {"New": "Replacement"}
+    assert repeated.steps[1].parameters["category_column"] == "District"
+    assert repeated.validations[0].parameters == {
+        "column": "State",
+        "values": ["Active", "Closed"],
+    }
+
+
 def test_template_rejects_unknown_parameters_and_incomplete_source_slots(
     database: Database,
 ) -> None:
@@ -133,6 +316,13 @@ def test_template_rejects_unknown_parameters_and_incomplete_source_slots(
         template.instantiate({})
     with pytest.raises(ValueError, match="unknown workflow parameters"):
         template.instantiate({"source_1": replacement}, {"python": "ignored"})
+
+    with pytest.raises(ValidationError, match="between 0 and 999"):
+        TemplateParameterBinding(
+            location=TemplateBindingLocation.STEP_PARAMETER,
+            step_id="clean-names",
+            parameter_path=("actions", 1000, "mapping"),
+        )
 
 
 def test_job_and_validation_history_are_aggregate_only(database: Database) -> None:
@@ -230,6 +420,128 @@ def test_job_history_filters_and_prunes_only_terminal_records(database: Database
     assert repository.get(active_id) is not None
 
 
+def test_job_history_rejects_regressions_and_terminal_overwrites(database: Database) -> None:
+    repository = JobHistoryRepository(database)
+    created_at = datetime.now(UTC) - timedelta(minutes=2)
+    running = JobHistoryRecord(
+        job_id=uuid4(),
+        name="Guarded history",
+        status=JobStatus.RUNNING,
+        created_at=created_at,
+        source_files=(FileHistoryMetadata(file_name="input.csv", sha256="d" * 64),),
+        application_version="0.1.0",
+        updated_at=created_at + timedelta(seconds=1),
+    )
+    repository.save(running)
+    regressed_payload = running.model_dump(mode="python")
+    regressed_payload.update(
+        status=JobStatus.AWAITING_APPROVAL,
+        updated_at=created_at + timedelta(seconds=2),
+    )
+    with pytest.raises(StorageError, match="running -> awaiting_approval"):
+        repository.save(JobHistoryRecord.model_validate(regressed_payload))
+
+    succeeded_payload = running.model_dump(mode="python")
+    succeeded_payload.update(
+        status=JobStatus.SUCCEEDED,
+        completed_at=created_at + timedelta(seconds=3),
+        output_file=FileHistoryMetadata(file_name="output.csv", sha256="e" * 64),
+        updated_at=created_at + timedelta(seconds=3),
+    )
+    succeeded = repository.save(JobHistoryRecord.model_validate(succeeded_payload))
+    assert repository.save(succeeded) == succeeded
+
+    overwritten_payload = succeeded.model_dump(mode="python")
+    overwritten_payload.update(
+        warning_count=99,
+        updated_at=created_at + timedelta(seconds=4),
+    )
+    with pytest.raises(StorageError, match="Terminal job history"):
+        repository.save(JobHistoryRecord.model_validate(overwritten_payload))
+    assert repository.get(succeeded.job_id) == succeeded
+
+
+def test_successful_job_can_be_linked_once_to_saved_workflow(database: Database) -> None:
+    history = JobHistoryRepository(database)
+    validations = ValidationSummaryRepository(database)
+    templates = WorkflowTemplateRepository(database)
+    template_service = WorkflowTemplateService(build_default_registry(), templates, history)
+    template = template_service.save_validated(_plan(), name="Linked cleanup")
+    completed_at = datetime.now(UTC)
+    succeeded = history.save(
+        JobHistoryRecord(
+            job_id=uuid4(),
+            name="Completed cleanup",
+            status=JobStatus.SUCCEEDED,
+            created_at=completed_at - timedelta(minutes=1),
+            completed_at=completed_at,
+            source_files=(FileHistoryMetadata(file_name="input.csv", sha256="f" * 64),),
+            output_file=FileHistoryMetadata(file_name="output.csv", sha256="a" * 64),
+            application_version="0.1.0",
+        )
+    )
+    service = JobHistoryService(history, validations)
+
+    linked = service.link_workflow(succeeded.job_id, template.workflow_id)
+
+    assert linked.workflow_id == template.workflow_id
+    assert service.link_workflow(succeeded.job_id, template.workflow_id) == linked
+    with pytest.raises(StorageError, match="different saved workflow"):
+        service.link_workflow(succeeded.job_id, uuid4())
+    with pytest.raises(StorageError, match="linked to job history"):
+        templates.delete(template.workflow_id)
+    assert templates.get(template.workflow_id) == template
+
+
+def test_global_validation_history_is_newest_first_and_paginated(database: Database) -> None:
+    history = JobHistoryRepository(database)
+    validations = ValidationSummaryRepository(database)
+    service = JobHistoryService(history, validations)
+    now = datetime.now(UTC)
+    job_ids = (uuid4(), uuid4())
+    for index, job_id in enumerate(job_ids):
+        history.save(
+            JobHistoryRecord(
+                job_id=job_id,
+                name=f"Validation job {index}",
+                status=JobStatus.RUNNING,
+                created_at=now - timedelta(minutes=index + 1),
+                source_files=(
+                    FileHistoryMetadata(file_name=f"input-{index}.csv", sha256=f"{index + 1}" * 64),
+                ),
+                application_version="0.1.0",
+            )
+        )
+    older = validations.add(
+        ValidationSummary(
+            job_id=job_ids[0],
+            passed=True,
+            checks_run=1,
+            error_count=0,
+            warning_count=0,
+            affected_row_count=0,
+            created_at=now - timedelta(seconds=2),
+        )
+    )
+    newer = validations.add(
+        ValidationSummary(
+            job_id=job_ids[1],
+            passed=False,
+            checks_run=2,
+            error_count=1,
+            warning_count=0,
+            affected_row_count=3,
+            created_at=now - timedelta(seconds=1),
+        )
+    )
+
+    assert validations.list_recent() == (newer, older)
+    assert service.recent_validations(limit=1) == (newer,)
+    assert validations.list_recent(limit=1, offset=1) == (older,)
+    with pytest.raises(ValueError, match="pagination"):
+        validations.list_recent(limit=0)
+
+
 def test_settings_are_allowlisted_and_typed(database: Database) -> None:
     settings = SettingsRepository(database)
     assert settings.get(SettingKey.LOCAL_ONLY) is True
@@ -247,7 +559,9 @@ def test_file_history_rejects_paths() -> None:
         FileHistoryMetadata(file_name="C:\\Clients\\input.csv", sha256="a" * 64)
 
 
-def test_second_migration_upgrades_a_version_one_database(tmp_path: Path) -> None:
+def test_second_migration_resumes_a_partially_upgraded_version_one_database(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "legacy.sqlite3"
     connection = sqlite3.connect(path)
     connection.executescript(
@@ -275,6 +589,7 @@ def test_second_migration_upgrades_a_version_one_database(tmp_path: Path) -> Non
             summary_json TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+        ALTER TABLE jobs ADD COLUMN audit_metadata_json TEXT;
         """
     )
     connection.close()
@@ -288,8 +603,47 @@ def test_second_migration_upgrades_a_version_one_database(tmp_path: Path) -> Non
             int(row[0]) for row in migrated.execute("SELECT version FROM schema_migrations")
         }
         job_columns = {str(row[1]) for row in migrated.execute("PRAGMA table_info(jobs)")}
-    assert versions == {1, 2}
+    assert versions == {1, 2, 3}
     assert {"audit_metadata_json", "updated_at"} <= job_columns
+
+
+def test_privacy_migration_scrubs_legacy_template_consent(database: Database) -> None:
+    templates = WorkflowTemplateRepository(database)
+    service = WorkflowTemplateService(
+        build_default_registry(), templates, JobHistoryRepository(database)
+    )
+    template = service.save_validated(_plan(), name="Legacy privacy")
+    with database.connect() as connection:
+        serialized = str(
+            connection.execute(
+                "SELECT plan_json FROM workflow_templates WHERE workflow_id = ?",
+                (str(template.workflow_id),),
+            ).fetchone()[0]
+        )
+        payload = json.loads(serialized)
+        payload["privacy"] = {
+            "mode": "ai_assisted",
+            "metadata_upload_consent": True,
+            "raw_data_upload_consent": True,
+        }
+        connection.execute(
+            "UPDATE workflow_templates SET plan_json = ? WHERE workflow_id = ?",
+            (json.dumps(payload), str(template.workflow_id)),
+        )
+        connection.execute("DELETE FROM schema_migrations WHERE version = 3")
+
+    database.initialize()
+
+    migrated = templates.get_required(template.workflow_id)
+    assert migrated.privacy == PrivacyMetadata()
+    with database.connect() as connection:
+        stored = str(
+            connection.execute(
+                "SELECT plan_json FROM workflow_templates WHERE workflow_id = ?",
+                (str(template.workflow_id),),
+            ).fetchone()[0]
+        )
+    assert '"raw_data_upload_consent":true' not in stored.replace(" ", "").casefold()
 
 
 def test_successful_job_requires_output_metadata() -> None:

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import copy
+import math
+import re
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import PurePosixPath, PureWindowsPath
@@ -9,6 +12,7 @@ from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic_core import to_jsonable_python
 
 from sheetpilot.core.plan_schema import (
     OperationPlan,
@@ -94,6 +98,8 @@ class JobHistoryRecord(StorageModel):
         terminal = {JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED}
         if self.status in terminal and self.completed_at is None:
             raise ValueError("terminal jobs require a completion timestamp")
+        if self.status not in terminal and self.completed_at is not None:
+            raise ValueError("active jobs cannot have a completion timestamp")
         if self.status == JobStatus.SUCCEEDED and self.output_file is None:
             raise ValueError("successful jobs require output metadata")
         if self.status != JobStatus.SUCCEEDED and self.output_file is not None:
@@ -176,6 +182,7 @@ class TemplateParameterKind(StrEnum):
     COLUMNS = "columns"
     MAPPING = "mapping"
     OUTPUT_NAME = "output_name"
+    JSON = "json"
 
 
 class TemplateBindingLocation(StrEnum):
@@ -191,6 +198,27 @@ class TemplateParameterBinding(StorageModel):
     step_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]+$")
     validation_index: int | None = Field(default=None, ge=0)
     parameter_name: str | None = Field(default=None, min_length=1, max_length=100)
+    parameter_path: tuple[str | int, ...] = Field(default=(), max_length=16)
+
+    @field_validator("parameter_path", mode="before")
+    @classmethod
+    def require_typed_parameter_path(cls, value: Any) -> Any:
+        if not isinstance(value, (list, tuple)):
+            raise ValueError("parameter paths must be an array")
+        if any(type(part) not in {str, int} for part in value):
+            raise ValueError("parameter path parts must be strings or integers")
+        return value
+
+    @field_validator("parameter_path")
+    @classmethod
+    def validate_parameter_path(cls, value: tuple[str | int, ...]) -> tuple[str | int, ...]:
+        for part in value:
+            if isinstance(part, int):
+                if not 0 <= part <= 999:
+                    raise ValueError("parameter path indexes must be between 0 and 999")
+            elif not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,99}", part):
+                raise ValueError("parameter path keys must be bounded identifiers")
+        return value
 
     @model_validator(mode="after")
     def require_location_selector(self) -> TemplateParameterBinding:
@@ -204,14 +232,30 @@ class TemplateParameterBinding(StorageModel):
         elif self.step_id is not None:
             raise ValueError("step_id is only valid for step bindings")
         if self.location == TemplateBindingLocation.STEP_PARAMETER:
-            if self.parameter_name is None:
-                raise ValueError("step parameter bindings require parameter_name")
+            if (self.parameter_name is None) == (not self.parameter_path):
+                raise ValueError("step parameter bindings require exactly one parameter selector")
         elif self.location == TemplateBindingLocation.VALIDATION_PARAMETER:
-            if self.validation_index is None or self.parameter_name is None:
-                raise ValueError("validation bindings require an index and parameter_name")
-        elif self.validation_index is not None or self.parameter_name is not None:
+            if self.validation_index is None or (
+                (self.parameter_name is None) == (not self.parameter_path)
+            ):
+                raise ValueError(
+                    "validation bindings require an index and exactly one parameter selector"
+                )
+        elif (
+            self.validation_index is not None
+            or self.parameter_name is not None
+            or self.parameter_path
+        ):
             raise ValueError("this binding does not accept a parameter selector")
         return self
+
+    @property
+    def resolved_parameter_path(self) -> tuple[str | int, ...]:
+        if self.parameter_path:
+            return self.parameter_path
+        if self.parameter_name is not None:
+            return (self.parameter_name,)
+        return ()
 
 
 class WorkflowParameter(StorageModel):
@@ -263,6 +307,8 @@ class WorkflowTemplate(StorageModel):
 
     @model_validator(mode="after")
     def validate_blueprint_references(self) -> WorkflowTemplate:
+        if self.privacy != PrivacyMetadata():
+            raise ValueError("workflow templates must reset privacy mode and upload consent")
         slot_ids = [slot.slot_id for slot in self.source_slots]
         if len(slot_ids) != len(set(slot_ids)):
             raise ValueError("workflow source slot IDs must be unique")
@@ -275,15 +321,45 @@ class WorkflowTemplate(StorageModel):
         if len(parameter_keys) != len(set(parameter_keys)):
             raise ValueError("workflow parameter keys must be unique")
         step_set = set(step_ids)
+        steps_by_id = {step.step_id: step for step in self.steps}
         for parameter in self.parameters:
             binding = parameter.binding
+            if parameter.default_value is not None:
+                self._validate_parameter_value(parameter.kind, parameter.default_value)
             if binding.step_id is not None and binding.step_id not in step_set:
                 raise ValueError("workflow parameter refers to an unknown step")
             if binding.validation_index is not None and binding.validation_index >= len(
                 self.validations
             ):
                 raise ValueError("workflow parameter refers to an unknown validation")
+            path = binding.resolved_parameter_path
+            if binding.location == TemplateBindingLocation.STEP_PARAMETER and (
+                binding.step_id is None
+                or not self._path_exists(steps_by_id[binding.step_id].parameters, path)
+            ):
+                raise ValueError("workflow parameter refers to an unknown step parameter")
+            if binding.location == TemplateBindingLocation.VALIDATION_PARAMETER and (
+                binding.validation_index is None
+                or not self._path_exists(
+                    self.validations[binding.validation_index].parameters, path
+                )
+            ):
+                raise ValueError("workflow parameter refers to an unknown validation parameter")
         return self
+
+    @staticmethod
+    def _path_exists(root: object, path: tuple[str | int, ...]) -> bool:
+        current = root
+        for part in path:
+            if isinstance(part, str):
+                if not isinstance(current, dict) or part not in current:
+                    return False
+                current = current[part]
+            else:
+                if not isinstance(current, list) or not 0 <= part < len(current):
+                    return False
+                current = current[part]
+        return bool(path)
 
     @classmethod
     def from_plan(
@@ -325,7 +401,11 @@ class WorkflowTemplate(StorageModel):
             )
             for step in plan.steps
         )
-        resolved_parameters = parameters or cls._default_parameters(steps)
+        resolved_parameters = (
+            parameters
+            if parameters is not None
+            else cls._default_parameters(steps, tuple(plan.validations), plan.output)
+        )
         return cls(
             name=name,
             description=description,
@@ -333,47 +413,184 @@ class WorkflowTemplate(StorageModel):
             steps=steps,
             validations=tuple(plan.validations),
             output=plan.output,
-            privacy=plan.privacy,
+            privacy=PrivacyMetadata(),
             parameters=resolved_parameters,
         )
 
     @staticmethod
-    def _default_parameters(steps: tuple[WorkflowStep, ...]) -> tuple[WorkflowParameter, ...]:
+    def _default_parameters(
+        steps: tuple[WorkflowStep, ...],
+        validations: tuple[ValidationRule, ...],
+        output: OutputSettings,
+    ) -> tuple[WorkflowParameter, ...]:
         parameters: list[WorkflowParameter] = [
             WorkflowParameter(
                 key="output_name",
                 label="Output name",
                 kind=TemplateParameterKind.OUTPUT_NAME,
                 binding=TemplateParameterBinding(location=TemplateBindingLocation.OUTPUT_NAME),
+                default_value=output.output_name,
             )
         ]
+        used_keys = {parameter.key for parameter in parameters}
+
+        def unique_key(owner: str, descriptor: str) -> str:
+            normalized = re.sub(
+                r"[^a-z0-9]+",
+                "_",
+                f"{owner}_{descriptor}".casefold(),
+            ).strip("_")
+            if not normalized or not normalized[0].isalpha():
+                normalized = f"step_{normalized}" if normalized else "step"
+            base = normalized[:80].rstrip("_") or "step"
+            candidate = base
+            sequence = 2
+            while candidate in used_keys:
+                discriminator = f"_{sequence}"
+                trimmed = base[: 80 - len(discriminator)].rstrip("_")
+                candidate = f"{trimmed or 'step'}{discriminator}"
+                sequence += 1
+            used_keys.add(candidate)
+            return candidate
+
         for step in steps:
-            key_prefix = step.step_id.casefold().replace("-", "_")
             if step.sheet is not None:
                 parameters.append(
                     WorkflowParameter(
-                        key=f"{key_prefix}_input_sheet",
+                        key=unique_key(step.step_id, "input_sheet"),
                         label=f"{step.step_id} input sheet",
                         kind=TemplateParameterKind.SHEET,
                         binding=TemplateParameterBinding(
                             location=TemplateBindingLocation.STEP_SHEET,
                             step_id=step.step_id,
                         ),
+                        default_value=step.sheet,
                     )
                 )
             if step.columns:
                 parameters.append(
                     WorkflowParameter(
-                        key=f"{key_prefix}_target_columns",
+                        key=unique_key(step.step_id, "target_columns"),
                         label=f"{step.step_id} target columns",
                         kind=TemplateParameterKind.COLUMNS,
                         binding=TemplateParameterBinding(
                             location=TemplateBindingLocation.STEP_COLUMNS,
                             step_id=step.step_id,
                         ),
+                        default_value=list(step.columns),
+                    )
+                )
+            for path, kind, descriptor, label, value in WorkflowTemplate._step_candidates(
+                step.parameters
+            ):
+                parameters.append(
+                    WorkflowParameter(
+                        key=unique_key(step.step_id, descriptor),
+                        label=f"{step.step_id} {label}"[:120],
+                        kind=kind,
+                        binding=TemplateParameterBinding(
+                            location=TemplateBindingLocation.STEP_PARAMETER,
+                            step_id=step.step_id,
+                            parameter_path=path,
+                        ),
+                        default_value=WorkflowTemplate._json_default(value),
+                    )
+                )
+        for index, validation in enumerate(validations):
+            for name in sorted(validation.parameters):
+                value = validation.parameters[name]
+                kind = WorkflowTemplate._parameter_kind(name, value)
+                parameters.append(
+                    WorkflowParameter(
+                        key=unique_key(f"validation_{index + 1}", name),
+                        label=f"{validation.name} {name.replace('_', ' ')}"[:120],
+                        kind=kind,
+                        binding=TemplateParameterBinding(
+                            location=TemplateBindingLocation.VALIDATION_PARAMETER,
+                            validation_index=index,
+                            parameter_path=(name,),
+                        ),
+                        default_value=WorkflowTemplate._json_default(value),
                     )
                 )
         return tuple(parameters)
+
+    @staticmethod
+    def _parameter_kind(name: str, value: Any) -> TemplateParameterKind:
+        if name in {"mapping", "replacement_map", "replacements"} and isinstance(value, dict):
+            return TemplateParameterKind.MAPPING
+        if (name == "column" or name.endswith("_column")) and isinstance(value, str):
+            return TemplateParameterKind.COLUMN
+        if (name == "columns" or name.endswith("_columns") or name == "group_by") and (
+            isinstance(value, list) and all(isinstance(item, str) for item in value)
+        ):
+            return TemplateParameterKind.COLUMNS
+        return TemplateParameterKind.JSON
+
+    @staticmethod
+    def _json_default(value: Any) -> Any:
+        result = to_jsonable_python(value)
+        WorkflowTemplate._validate_json_value(result)
+        return result
+
+    @staticmethod
+    def _step_candidates(
+        root: dict[str, Any],
+    ) -> tuple[
+        tuple[
+            tuple[str | int, ...],
+            TemplateParameterKind,
+            str,
+            str,
+            Any,
+        ],
+        ...,
+    ]:
+        candidates: list[
+            tuple[
+                tuple[str | int, ...],
+                TemplateParameterKind,
+                str,
+                str,
+                Any,
+            ]
+        ] = []
+        mapping_names = {"mapping", "replacement_map", "replacements"}
+        grouping_names = {
+            "category_column",
+            "group_by",
+            "grouping_column",
+            "grouping_columns",
+        }
+
+        def visit(value: Any, path: tuple[str | int, ...]) -> None:
+            if len(path) > 16:
+                return
+            name = path[-1] if path and isinstance(path[-1], str) else None
+            if name in mapping_names and isinstance(value, dict):
+                candidates.append(
+                    (
+                        path,
+                        TemplateParameterKind.MAPPING,
+                        "mapping",
+                        "replacement mapping",
+                        value,
+                    )
+                )
+                return
+            if name in grouping_names:
+                kind = WorkflowTemplate._parameter_kind(name, value)
+                candidates.append((path, kind, "grouping_columns", "grouping columns", value))
+                return
+            if isinstance(value, dict):
+                for key in sorted(value):
+                    visit(value[key], (*path, key))
+            elif isinstance(value, list):
+                for index, item in enumerate(value[:1000]):
+                    visit(item, (*path, index))
+
+        visit(root, ())
+        return tuple(candidates)
 
     def instantiate(
         self,
@@ -416,7 +633,11 @@ class WorkflowTemplate(StorageModel):
             if binding.step_id is not None:
                 step = next(item for item in step_payloads if item["step_id"] == binding.step_id)
                 if binding.location == TemplateBindingLocation.STEP_PARAMETER:
-                    step["parameters"][binding.parameter_name] = value
+                    self._set_parameter_path(
+                        step["parameters"],
+                        binding.resolved_parameter_path,
+                        copy.deepcopy(value),
+                    )
                 elif binding.location == TemplateBindingLocation.STEP_SHEET:
                     step["sheet"] = value
                 elif binding.location == TemplateBindingLocation.STEP_COLUMNS:
@@ -426,7 +647,11 @@ class WorkflowTemplate(StorageModel):
                 index = binding.validation_index
                 if index is None:
                     raise ValueError("validation binding index is missing")
-                validation_payloads[index]["parameters"][binding.parameter_name] = value
+                self._set_parameter_path(
+                    validation_payloads[index]["parameters"],
+                    binding.resolved_parameter_path,
+                    copy.deepcopy(value),
+                )
 
         plan_steps = [
             PlanStep(
@@ -455,8 +680,36 @@ class WorkflowTemplate(StorageModel):
             steps=plan_steps,
             validations=[ValidationRule.model_validate(item) for item in validation_payloads],
             output=OutputSettings.model_validate(output_payload),
-            privacy=self.privacy,
+            privacy=PrivacyMetadata(),
         )
+
+    @staticmethod
+    def _set_parameter_path(
+        root: dict[str, Any],
+        path: tuple[str | int, ...],
+        value: Any,
+    ) -> None:
+        if not path:
+            raise ValueError("workflow parameter binding has no parameter path")
+        current: Any = root
+        for part in path[:-1]:
+            if isinstance(part, str):
+                if not isinstance(current, dict) or part not in current:
+                    raise ValueError("workflow parameter path no longer exists")
+                current = current[part]
+            else:
+                if not isinstance(current, list) or not 0 <= part < len(current):
+                    raise ValueError("workflow parameter path no longer exists")
+                current = current[part]
+        final = path[-1]
+        if isinstance(final, str):
+            if not isinstance(current, dict) or final not in current:
+                raise ValueError("workflow parameter path no longer exists")
+            current[final] = value
+        else:
+            if not isinstance(current, list) or not 0 <= final < len(current):
+                raise ValueError("workflow parameter path no longer exists")
+            current[final] = value
 
     @staticmethod
     def _validate_parameter_value(kind: TemplateParameterKind, value: Any) -> None:
@@ -475,7 +728,35 @@ class WorkflowTemplate(StorageModel):
                 or not all(isinstance(item, str) and item for item in value)
             ):
                 raise ValueError("columns parameters require a non-empty string list")
-        elif kind == TemplateParameterKind.MAPPING and (
-            not isinstance(value, dict) or not all(isinstance(key, str) for key in value)
-        ):
-            raise ValueError("mapping parameters require an object with string keys")
+        elif kind == TemplateParameterKind.MAPPING:
+            if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+                raise ValueError("mapping parameters require an object with string keys")
+            WorkflowTemplate._validate_json_value(value)
+        elif kind == TemplateParameterKind.JSON:
+            WorkflowTemplate._validate_json_value(value)
+
+    @staticmethod
+    def _validate_json_value(value: Any, *, depth: int = 0) -> None:
+        if depth > 16:
+            raise ValueError("JSON workflow parameters are too deeply nested")
+        if value is None or type(value) in {str, int, bool}:
+            return
+        if type(value) is float:
+            if not math.isfinite(value):
+                raise ValueError("JSON workflow parameters require finite numbers")
+            return
+        if isinstance(value, list):
+            if len(value) > 10_000:
+                raise ValueError("JSON workflow parameter arrays are too large")
+            for item in value:
+                WorkflowTemplate._validate_json_value(item, depth=depth + 1)
+            return
+        if isinstance(value, dict):
+            if len(value) > 10_000 or not all(
+                isinstance(key, str) and len(key) <= 100 for key in value
+            ):
+                raise ValueError("JSON workflow parameter objects require bounded string keys")
+            for item in value.values():
+                WorkflowTemplate._validate_json_value(item, depth=depth + 1)
+            return
+        raise ValueError("workflow parameters must contain only JSON-compatible values")

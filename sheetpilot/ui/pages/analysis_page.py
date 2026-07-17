@@ -41,6 +41,7 @@ class AnalysisPage(QWidget):
 
     analysis_completed = Signal(object)
     job_ready = Signal(object)
+    busy_changed = Signal(bool)
 
     def __init__(self, profiler: FileProfiler, thread_pool: QThreadPool | None = None) -> None:
         super().__init__()
@@ -249,6 +250,7 @@ class AnalysisPage(QWidget):
             self._invalidate_analysis()
 
     def _set_running(self, running: bool) -> None:
+        changed = self._analysis_running != running
         self._analysis_running = running
         self.setAcceptDrops(not running)
         for widget in (
@@ -260,6 +262,8 @@ class AnalysisPage(QWidget):
             widget.setEnabled(not running)
         self.cancel_button.setEnabled(running)
         self.progress.setVisible(running)
+        if changed:
+            self.busy_changed.emit(running)
 
     def _validate_intake(self) -> bool:
         if not self.job_name.text().strip():
@@ -370,6 +374,11 @@ class AnalysisPage(QWidget):
         self.job_ready.emit(draft)
 
     def reset_job(self) -> None:
+        if self._analysis_running:
+            self.status_label.setText(
+                "Cancel the active analysis before starting or loading another job."
+            )
+            return
         self._paths.clear()
         self.file_list.clear()
         self.job_name.clear()
@@ -379,6 +388,34 @@ class AnalysisPage(QWidget):
         self.output_directory.clear()
         self.status_label.clear()
         self._invalidate_analysis()
+
+    def prepare_for_workflow(
+        self,
+        *,
+        name: str,
+        description: str,
+        output_format: OutputFormat,
+        output_name: str,
+        preserve_formatting: bool,
+        expected_source_count: int,
+        default_output_directory: Path | None = None,
+    ) -> None:
+        """Reset source state while retaining a concrete reusable workflow intent."""
+        self.reset_job()
+        self.job_name.setText(f"{name} repeat")
+        request = description.strip() or f"Run the saved workflow '{name}' with new files."
+        self.instructions.setPlainText(request)
+        format_index = self.output_format.findData(output_format)
+        if format_index >= 0:
+            self.output_format.setCurrentIndex(format_index)
+        self.output_name.setText(output_name)
+        self.preserve_formatting.setChecked(preserve_formatting)
+        if default_output_directory is not None and default_output_directory.is_dir():
+            self.output_directory.setText(str(default_output_directory))
+        self.status_label.setText(
+            f"Saved workflow loaded. Add exactly {expected_source_count} new source file(s), "
+            "then analyse them before reviewing the rebound plan."
+        )
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
         if (

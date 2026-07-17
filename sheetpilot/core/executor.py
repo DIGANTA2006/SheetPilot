@@ -64,6 +64,7 @@ class ExecutionResult(BaseModel):
     output: AtomicOutputReceipt
     audit: AtomicOutputReceipt
     backups: tuple[BackupReceipt, ...]
+    validation: ValidationReport
     reconciliation: ReconciliationResult
     audit_report: AuditReport
 
@@ -389,6 +390,7 @@ class JobExecutor:
             output=output_receipt,
             audit=audit_receipt,
             backups=backups,
+            validation=validation,
             reconciliation=reconciliation,
             audit_report=audit_report,
         )

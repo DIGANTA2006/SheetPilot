@@ -50,10 +50,18 @@ backup restore. Long-running actions disable conflicting controls and offer safe
 cancellation at defined boundaries; once an atomic execution transaction begins, it is
 allowed to finish so a committed result is never hidden from the user.
 
+Phase 6 adds durable, privacy-conscious local operations: transactional SQLite
+migrations, aggregate job and validation history, audit/output identities, allowlisted
+settings, file-independent workflow templates, and typed reusable parameters for sheets,
+columns, groupings, mappings, validation rules, and output names. The desktop navigation
+provides saved-workflow, template, history, validation, settings, and offline help screens.
+Successful plans can be saved without client paths, hashes, rows, or upload consents, then
+rebound to newly analysed files and reviewed through the same preview and approval flow.
+
 No cloud provider is required. The application starts in local/offline mode and the AI
-planner remains separate from the deterministic executor. Saved-workflow screens,
-planner integration, optional Excel automation, and frozen packaging are tracked as later
-phases and are not described as complete here until their own gates and commits pass.
+planner remains separate from the deterministic executor. Planner integration, optional
+Excel automation, and frozen packaging are tracked as later phases and are not described
+as complete here until their own gates and commits pass.
 
 ## Development setup
 

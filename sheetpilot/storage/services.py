@@ -209,6 +209,18 @@ class JobHistoryService:
         )
         return self.validations.add(summary)
 
+    def link_workflow(self, job_id: UUID, workflow_id: UUID) -> JobHistoryRecord:
+        """Attach a reusable workflow to an already successful history record."""
+        return self.history.link_workflow(job_id, workflow_id)
+
+    def recent_validations(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[ValidationSummary, ...]:
+        return self.validations.list_recent(limit=limit, offset=offset)
+
     @staticmethod
     def _updated_record(record: JobHistoryRecord, **updates: object) -> JobHistoryRecord:
         payload = record.model_dump(mode="python")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import cast
+from uuid import UUID
 
 from PySide6.QtCore import QThreadPool, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
@@ -11,6 +12,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMessageBox,
     QProgressBar,
@@ -22,11 +24,15 @@ from PySide6.QtWidgets import (
 )
 
 from sheetpilot.app.config import AppConfig
+from sheetpilot.app.persistence import PersistenceServices
 from sheetpilot.core.backup_service import BackupReceipt, BackupService
+from sheetpilot.core.exceptions import SheetPilotError
 from sheetpilot.core.executor import ExecutionResult, JobExecutor
 from sheetpilot.core.operation_registry import OperationRegistry
 from sheetpilot.core.plan_schema import OperationPlan
 from sheetpilot.core.preview_engine import ExecutionApproval, PreviewResult
+from sheetpilot.storage.database import Database
+from sheetpilot.storage.models import WorkflowTemplate
 from sheetpilot.ui.workers.analysis_worker import CancellationToken
 from sheetpilot.ui.workers.job_workers import ExecutionWorker, RestoreWorker
 from sheetpilot.ui.workflow_models import PreparedJob
@@ -36,26 +42,39 @@ class ResultsPage(QWidget):
     """Run execution in the background and show durable completion evidence."""
 
     back_requested = Signal()
-    repeat_requested = Signal()
+    repeat_requested = Signal(object)
+    workflow_saved = Signal(object)
     execution_completed = Signal(object)
     execution_failed = Signal(str)
+    execution_cancelled = Signal()
+    busy_changed = Signal(bool)
 
     def __init__(
         self,
         config: AppConfig,
         registry: OperationRegistry,
         thread_pool: QThreadPool | None = None,
+        persistence: PersistenceServices | None = None,
     ) -> None:
         super().__init__()
         self._config = config
         self._executor = JobExecutor(config, registry)
         self._backup_service = BackupService(config.backup_dir)
         self._thread_pool = thread_pool or QThreadPool.globalInstance()
+        if persistence is None:
+            database = Database(config.database_path)
+            database.initialize()
+            persistence = PersistenceServices.build(database, registry)
+        self._persistence = persistence
         self._token: CancellationToken | None = None
         self._execution_worker: ExecutionWorker | None = None
         self._restore_worker: RestoreWorker | None = None
         self._result: ExecutionResult | None = None
         self._available_backups: tuple[BackupReceipt, ...] = ()
+        self._plan: OperationPlan | None = None
+        self._workflow_template: WorkflowTemplate | None = None
+        self._workflow_id: UUID | None = None
+        self._history_started = False
         self._diagnostic = ""
 
         layout = QVBoxLayout(self)
@@ -112,12 +131,15 @@ class ResultsPage(QWidget):
         self.back.clicked.connect(self.back_requested)
         self.repeat = QPushButton("Repeat with new files")
         self.repeat.setObjectName("primaryButton")
-        self.repeat.clicked.connect(self.repeat_requested)
+        self.repeat.clicked.connect(self._repeat_workflow)
+        self.save_workflow = QPushButton("Save workflow")
+        self.save_workflow.clicked.connect(self._save_workflow)
         for widget in (
             self.open_folder,
             self.open_audit,
             self.backup_choice,
             self.restore,
+            self.save_workflow,
             self.repeat,
         ):
             widget.setVisible(False)
@@ -128,6 +150,7 @@ class ResultsPage(QWidget):
         actions.addWidget(self.open_audit)
         actions.addWidget(self.backup_choice)
         actions.addWidget(self.restore)
+        actions.addWidget(self.save_workflow)
         actions.addWidget(self.repeat)
         layout.addLayout(actions)
 
@@ -137,9 +160,16 @@ class ResultsPage(QWidget):
         plan: OperationPlan,
         preview: PreviewResult,
         approval: ExecutionApproval,
+        *,
+        workflow_template: WorkflowTemplate | None = None,
+        workflow_id: UUID | None = None,
     ) -> None:
         self._result = None
         self._available_backups = ()
+        self._plan = plan
+        self._workflow_template = workflow_template
+        self._workflow_id = workflow_id
+        self._history_started = False
         self.summary.setVisible(False)
         self.paths.setVisible(False)
         self.diagnostic_button.setVisible(False)
@@ -150,6 +180,7 @@ class ResultsPage(QWidget):
             self.open_audit,
             self.backup_choice,
             self.restore,
+            self.save_workflow,
             self.repeat,
         ):
             widget.setVisible(False)
@@ -162,6 +193,24 @@ class ResultsPage(QWidget):
             "Starting the protected transaction. Cancellation is available until execution "
             "begins; an active atomic commit will finish safely."
         )
+        try:
+            self._persistence.jobs.record_started(plan, workflow_id=workflow_id)
+        except (SheetPilotError, ValueError) as error:
+            self.progress.setVisible(False)
+            self.cancel_button.setVisible(False)
+            self.back.setEnabled(True)
+            self._diagnostic = (
+                f"Diagnostic code: history_start_failed\nType: {type(error).__name__}"
+            )
+            self.diagnostic_button.setVisible(True)
+            self.status.setText(
+                "Execution did not start because its local history record could not be "
+                "created. No source or output file was changed."
+            )
+            self.execution_failed.emit("history_start_failed")
+            return
+        self._history_started = True
+        self.busy_changed.emit(True)
         self._token = CancellationToken()
         self._execution_worker = ExecutionWorker(
             self._executor,
@@ -201,12 +250,15 @@ class ResultsPage(QWidget):
             )
             return
         self._result = result
+        self.busy_changed.emit(False)
+        metadata_warning = self._record_success(result)
         self.progress.setVisible(False)
         self.cancel_button.setVisible(False)
         self.back.setEnabled(False)
         reconciliation = result.reconciliation
         self.status.setText(
             f"Completed safely · reconciliation {reconciliation.status.value.replace('_', ' ')}."
+            + metadata_warning
         )
         values: tuple[tuple[str, object], ...] = (
             ("Original rows", reconciliation.original_row_count),
@@ -244,10 +296,33 @@ class ResultsPage(QWidget):
             self.open_audit,
             self.backup_choice,
             self.restore,
+            self.save_workflow,
             self.repeat,
         ):
             widget.setVisible(True)
+        if self._workflow_id is not None:
+            self.save_workflow.setText("Workflow already saved")
+            self.save_workflow.setEnabled(False)
+        else:
+            self.save_workflow.setText("Save workflow")
+            self.save_workflow.setEnabled(True)
         self.execution_completed.emit(result)
+
+    def _record_success(self, result: ExecutionResult) -> str:
+        if not self._history_started:
+            return " Local history was not started."
+        try:
+            self._persistence.jobs.record_success(result)
+            self._persistence.jobs.record_validation(result.job_id, result.validation)
+        except (SheetPilotError, ValueError) as error:
+            self._diagnostic = (
+                f"Diagnostic code: history_completion_failed\nType: {type(error).__name__}"
+            )
+            self.diagnostic_button.setVisible(True)
+            return " Output is valid, but local history metadata could not be completed."
+        finally:
+            self._history_started = False
+        return ""
 
     def _on_failed(self, code: str, message: str, details: str) -> None:
         self._on_failed_with_backups(code, message, details, ())
@@ -255,6 +330,8 @@ class ResultsPage(QWidget):
     def _on_failed_with_backups(
         self, code: str, message: str, details: str, backups: object
     ) -> None:
+        self.busy_changed.emit(False)
+        self._record_failure()
         self.progress.setVisible(False)
         self.cancel_button.setVisible(False)
         self.back.setEnabled(True)
@@ -286,10 +363,33 @@ class ResultsPage(QWidget):
         self.execution_failed.emit(code)
 
     def _on_cancelled(self) -> None:
+        self.busy_changed.emit(False)
+        self._record_cancelled()
         self.progress.setVisible(False)
         self.cancel_button.setVisible(False)
         self.back.setEnabled(True)
         self.status.setText("Execution cancelled before the transaction began. No output was made.")
+        self.execution_cancelled.emit()
+
+    def _record_failure(self) -> None:
+        if not self._history_started or self._plan is None:
+            return
+        try:
+            self._persistence.jobs.record_failure(self._plan.job_id)
+        except (SheetPilotError, ValueError):
+            pass
+        finally:
+            self._history_started = False
+
+    def _record_cancelled(self) -> None:
+        if not self._history_started or self._plan is None:
+            return
+        try:
+            self._persistence.jobs.record_cancelled(self._plan.job_id)
+        except (SheetPilotError, ValueError):
+            pass
+        finally:
+            self._history_started = False
 
     def _open_output_folder(self) -> None:
         if self._result is not None:
@@ -329,6 +429,7 @@ class ResultsPage(QWidget):
             return
         self.restore.setEnabled(False)
         self.status.setText("Restoring a hash-verified backup in the background…")
+        self.busy_changed.emit(True)
         self._restore_worker = RestoreWorker(self._backup_service, receipt, target)
         self._restore_worker.signals.progress.connect(self._on_progress)
         self._restore_worker.signals.completed.connect(self._on_restored)
@@ -336,10 +437,12 @@ class ResultsPage(QWidget):
         self._thread_pool.start(self._restore_worker)
 
     def _on_restored(self, destination: object) -> None:
+        self.busy_changed.emit(False)
         self.restore.setEnabled(True)
         self.status.setText(f"Backup restored to a new file: {destination}")
 
     def _on_restore_failed(self, code: str, message: str, details: str) -> None:
+        self.busy_changed.emit(False)
         self.restore.setEnabled(True)
         self._diagnostic = f"Diagnostic code: {code}\nType: {details}"
         self.diagnostic_button.setVisible(True)
@@ -347,3 +450,57 @@ class ResultsPage(QWidget):
 
     def _show_diagnostic(self) -> None:
         QMessageBox.information(self, "Diagnostic details", self._diagnostic)
+
+    def _save_workflow(self) -> None:
+        if self._result is None or self._plan is None or self._workflow_id is not None:
+            return
+        name, accepted = QInputDialog.getText(
+            self,
+            "Save reusable workflow",
+            "Workflow name",
+            text=self._plan.job_name,
+        )
+        if not accepted or not name.strip():
+            return
+        description, description_accepted = QInputDialog.getMultiLineText(
+            self,
+            "Workflow description",
+            "Describe when this workflow should be reused",
+            self._plan.job_name,
+        )
+        if not description_accepted:
+            return
+        try:
+            template = self._persistence.workflows.save_validated(
+                self._plan,
+                name=name.strip(),
+                description=description.strip(),
+            )
+            self._persistence.jobs.link_workflow(self._plan.job_id, template.workflow_id)
+        except (SheetPilotError, ValueError) as error:
+            self._diagnostic = (
+                f"Diagnostic code: workflow_save_failed\nType: {type(error).__name__}"
+            )
+            self.diagnostic_button.setVisible(True)
+            self.status.setText(f"The workflow could not be saved: {error}")
+            return
+        self._workflow_template = template
+        self._workflow_id = template.workflow_id
+        self.save_workflow.setText("Workflow saved")
+        self.save_workflow.setEnabled(False)
+        self.status.setText(
+            "Workflow saved without source paths, hashes, spreadsheet rows, or cloud transfer."
+        )
+        self.workflow_saved.emit(template)
+
+    def _repeat_workflow(self) -> None:
+        if self._plan is None or self._result is None:
+            return
+        template = self._workflow_template
+        if template is None:
+            template = WorkflowTemplate.from_plan(
+                self._plan,
+                name=self._plan.job_name,
+                description="Repeat this reviewed deterministic workflow with new files.",
+            )
+        self.repeat_requested.emit(template)
