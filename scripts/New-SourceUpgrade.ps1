@@ -4,7 +4,8 @@ param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
     [string]$Version,
     [string]$OutputPath,
-    [string]$PreviousUpgradePath
+    [string]$PreviousUpgradePath,
+    [string]$BaselineRevision = 'HEAD'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -39,8 +40,8 @@ function Get-GitBlobSha256 {
     $Info = [System.Diagnostics.ProcessStartInfo]::new()
     $Info.FileName = $Git.Path
     $Info.Arguments = (
-        '-C "' + $ProjectRoot.Replace('"', '\"') + '" cat-file blob "HEAD:' +
-        $RelativePath.Replace('"', '\"') + '"'
+        '-C "' + $ProjectRoot.Replace('"', '\"') + '" cat-file blob "' +
+        $ResolvedBaseline + ':' + $RelativePath.Replace('"', '\"') + '"'
     )
     $Info.UseShellExecute = $false
     $Info.CreateNoWindow = $true
@@ -60,7 +61,7 @@ function Get-GitBlobSha256 {
         $ErrorText = $Process.StandardError.ReadToEnd()
         $Process.WaitForExit()
         if ($Process.ExitCode -ne 0) {
-            if ($ErrorText -match 'does not exist|Not a valid object name|not in ''HEAD''') {
+            if ($ErrorText -match 'does not exist|Not a valid object name|exists on disk, but not in') {
                 return $null
             }
             throw "Git could not read the baseline for ${RelativePath}: $ErrorText"
@@ -101,7 +102,13 @@ function Read-PreviousManifest {
     return $Result
 }
 
-$Tracked = @(& $Git.Path -C $ProjectRoot diff --name-only --diff-filter=ACMRT HEAD --)
+$ResolvedBaseline = & $Git.Path -C $ProjectRoot rev-parse --verify "$BaselineRevision^{commit}"
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($ResolvedBaseline)) {
+    throw "The baseline revision is not a commit: $BaselineRevision"
+}
+$Tracked = @(
+    & $Git.Path -C $ProjectRoot diff --name-only --diff-filter=ACMRT $ResolvedBaseline --
+)
 if ($LASTEXITCODE -ne 0) { throw 'Git could not list changed tracked files.' }
 $Untracked = @(& $Git.Path -C $ProjectRoot ls-files --others --exclude-standard)
 if ($LASTEXITCODE -ne 0) { throw 'Git could not list untracked files.' }

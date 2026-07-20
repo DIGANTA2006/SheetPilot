@@ -13,8 +13,8 @@ if (Test-Path -LiteralPath $Python -PathType Leaf) {
     try {
         & $Python -c (
             'import struct, sys; ' +
-            'assert sys.version_info[:2] == (3, 12) and sys.platform == "win32"; ' +
-            'assert struct.calcsize("P") * 8 == 64; ' +
+            "assert sys.version_info[:2] == (3, 12) and sys.platform == 'win32'; " +
+            'assert struct.calcsize(chr(80)) * 8 == 64; ' +
             'import PySide6, polars, pydantic, sheetpilot'
         ) 2>$null
         $EnvironmentReady = $LASTEXITCODE -eq 0

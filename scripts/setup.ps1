@@ -21,7 +21,7 @@ function Test-CompatiblePython {
     try {
         $ProbeArguments = @($PrefixArguments) + @(
             '-c',
-            'import struct, sys; print(f"{sys.version_info.major}.{sys.version_info.minor}|{sys.platform}|{struct.calcsize(''P'') * 8}")'
+            "import struct, sys; print(f'{sys.version_info.major}.{sys.version_info.minor}|{sys.platform}|{struct.calcsize(chr(80)) * 8}')"
         )
         $Probe = & $Path @ProbeArguments 2>$null
         if ($LASTEXITCODE -eq 0 -and $Probe.Trim() -eq '3.12|win32|64') {
