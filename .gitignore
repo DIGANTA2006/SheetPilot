@@ -1,5 +1,6 @@
 ﻿# Python
 .venv/
+.venv.sheetpilot-stale-*/
 *.egg-info/
 __pycache__/
 *.py[cod]
@@ -36,6 +37,10 @@ Desktop.ini
 
 # Local instruction-file backups
 _instruction_backup_*/
+
+# Local upgrade and manual verification artifacts
+_sheetpilot_upgrade_backup_*/
+manual_beta_test/
 
 # Local Codex recovery metadata
 CODEX_RECOVERY_STATUS.txt

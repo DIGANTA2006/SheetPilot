@@ -14,9 +14,15 @@ from openpyxl.cell.cell import Cell
 from openpyxl.worksheet.worksheet import Worksheet
 from pydantic import BaseModel, ConfigDict
 
-from sheetpilot.core.exceptions import InvalidPlanError, OutputCollisionError
+from sheetpilot.core.exceptions import (
+    FormulaPreservationRiskError,
+    InvalidPlanError,
+    OutputCollisionError,
+    WorkbookFeaturePreservationRiskError,
+)
 from sheetpilot.engines.formulas import GeneratedFormulaSpec, render_formula
 from sheetpilot.engines.openpyxl_safety import close_workbook
+from sheetpilot.operations.tabular import validate_table_columns
 from sheetpilot.security.formula_guard import is_formula_injection
 
 
@@ -55,6 +61,52 @@ def _write_safe_cell(worksheet: Worksheet, row: int, column: int, value: Any) ->
         cell.data_type = "s"
 
 
+def _preservable_formulas(
+    worksheet: Worksheet,
+    frame: pl.DataFrame,
+    output_headers: list[str],
+) -> dict[tuple[int, int], str]:
+    """Return formulas safe to restore at their original coordinates.
+
+    Formula rebasing after row/column movement is intentionally unsupported. A
+    formula must still be present with exactly the same text at exactly the same
+    table coordinate, otherwise the formatting-preserving export fails closed.
+    """
+    preserved: dict[tuple[int, int], str] = {}
+    for row in worksheet.iter_rows():
+        for cell in row:
+            if cell.data_type != "f":
+                continue
+            formula = cell.value
+            cell_row = cell.row
+            cell_column = cell.column
+            if not isinstance(formula, str):
+                raise FormulaPreservationRiskError(
+                    f"Formula at {worksheet.title}!{cell.coordinate} uses an unsupported "
+                    "formula representation."
+                )
+            if not isinstance(cell_row, int) or not isinstance(cell_column, int):
+                raise FormulaPreservationRiskError(
+                    f"Formula at {worksheet.title}!{cell.coordinate} has an unsupported "
+                    "worksheet coordinate."
+                )
+            if cell_row == 1:
+                planned = (
+                    output_headers[cell_column - 1] if cell_column <= len(output_headers) else None
+                )
+            elif cell_row <= frame.height + 1 and cell_column <= frame.width:
+                planned = frame.item(cell_row - 2, cell_column - 1)
+            else:
+                planned = None
+            if planned != formula:
+                raise FormulaPreservationRiskError(
+                    f"Formula at {worksheet.title}!{cell.coordinate} would move, change, "
+                    "or be removed. SheetPilot cannot safely rebase existing formulas."
+                )
+            preserved[(cell_row, cell_column)] = formula
+    return preserved
+
+
 def replace_sheet_table(
     worksheet: Worksheet,
     frame: pl.DataFrame,
@@ -63,11 +115,18 @@ def replace_sheet_table(
     formats: list[ColumnFormatSpec] | None = None,
 ) -> None:
     """Replace cell values while retaining existing sheet structure and styles."""
+    validate_table_columns(frame)
+    if worksheet.merged_cells.ranges:
+        raise WorkbookFeaturePreservationRiskError(
+            f"Sheet {worksheet.title} contains merged cells. SheetPilot cannot safely replace "
+            "that table while preserving the merge layout."
+        )
     headers = list(frame.columns)
     formulas = formula_specs or []
     output_headers = headers + [spec.output_column for spec in formulas]
     if len(output_headers) != len(set(header.casefold() for header in output_headers)):
         raise InvalidPlanError("Workbook output requires unique headers.")
+    preserved_formulas = _preservable_formulas(worksheet, frame, output_headers)
     max_rows = max(worksheet.max_row, frame.height + 1)
     max_columns = max(worksheet.max_column, len(output_headers))
     for row in worksheet.iter_rows(min_row=1, max_row=max_rows, max_col=max_columns):
@@ -79,10 +138,19 @@ def replace_sheet_table(
             target_header = worksheet.cell(1, column_index)
             if isinstance(source_header, Cell) and isinstance(target_header, Cell):
                 _copy_style(source_header, target_header)
-        _write_safe_cell(worksheet, 1, column_index, header)
+        if (1, column_index) in preserved_formulas:
+            worksheet.cell(row=1, column=column_index).value = preserved_formulas[(1, column_index)]
+        else:
+            _write_safe_cell(worksheet, 1, column_index, header)
     for row_index, row in enumerate(frame.iter_rows(), start=2):
         for column_index, value in enumerate(row, start=1):
-            _write_safe_cell(worksheet, row_index, column_index, value)
+            coordinate = (row_index, column_index)
+            if coordinate in preserved_formulas:
+                worksheet.cell(row=row_index, column=column_index).value = preserved_formulas[
+                    coordinate
+                ]
+            else:
+                _write_safe_cell(worksheet, row_index, column_index, value)
         for formula_index, spec in enumerate(formulas, start=len(headers) + 1):
             cell = worksheet.cell(row=row_index, column=formula_index)
             cell.value = render_formula(spec, headers, row_index)

@@ -12,6 +12,7 @@ from xlsxwriter.worksheet import Worksheet
 
 from sheetpilot.core.exceptions import InvalidPlanError, OutputCollisionError
 from sheetpilot.engines.formulas import GeneratedFormulaSpec, render_formula
+from sheetpilot.operations.tabular import validate_table_columns
 from sheetpilot.security.path_guard import sanitize_filename
 
 
@@ -69,6 +70,7 @@ def write_new_workbook(
         formula_formats: dict[str, Any] = {}
         existing_names: set[str] = set()
         for requested_name, frame in tables.items():
+            validate_table_columns(frame)
             sheet_name = safe_sheet_name(requested_name, existing_names)
             worksheet = workbook.add_worksheet(sheet_name)
             formulas = (formula_specs or {}).get(requested_name, [])

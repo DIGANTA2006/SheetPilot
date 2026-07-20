@@ -70,6 +70,15 @@ class ExecutionResult(BaseModel):
     audit_report: AuditReport
 
 
+def _combine_validation_reports(*reports: ValidationReport) -> ValidationReport:
+    """Combine in-plan and final validations into one fail-closed execution gate."""
+    return ValidationReport(
+        passed=all(report.passed and report.error_count == 0 for report in reports),
+        checks_run=sum(report.checks_run for report in reports),
+        issues=tuple(issue for report in reports for issue in report.issues),
+    )
+
+
 def _eligible_formula(action: object) -> GeneratedFormulaSpec | None:
     if isinstance(action, ArithmeticAction):
         columns = [operand.column for operand in action.operands]
@@ -266,7 +275,7 @@ class JobExecutor:
                 [{"kind": rule.name, **rule.parameters} for rule in plan.validations]
             )
             primary = _primary_key(plan, final_tables)
-            validation = (
+            top_level_validation = (
                 validate_table(
                     strip_internal_columns(final_tables[primary]),
                     rules,
@@ -280,6 +289,10 @@ class JobExecutor:
                 )
                 if rules
                 else ValidationReport(passed=True, checks_run=0, issues=())
+            )
+            validation = _combine_validation_reports(
+                *run.validation_reports,
+                top_level_validation,
             )
             accepted_changes = tuple(
                 change

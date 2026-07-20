@@ -12,8 +12,14 @@ small, explicit vocabulary. Select one source and sheet when the job is ambiguou
 columns exactly, and separate actions with `then`, a semicolon, or a new line. Supported clauses are:
 
 - trim, collapse spaces, remove non-printing characters, normalize Unicode, or change text case;
-- stable single-column sorting, ascending by default or explicitly descending;
+- deterministic email, telephone, date, numeric-text, or Indian state standardization;
+- one-condition row filters for blanks, quoted exact/text matches, or numeric comparisons;
+- stable one- or multi-column sorting, ascending by default or explicitly descending;
 - mark exact duplicates or remove exact duplicates while keeping the first row.
+
+Filtering removes rows from the generated output, so every local filter is marked high risk and
+requires an explicit destructive-step confirmation. Standardization leaves uncertain values for
+review rather than guessing.
 
 An unknown or partially understood clause rejects the whole draft. The parser never guesses an
 operation and never generates Python, formulas, SQL, VBA, PowerShell, or shell commands.

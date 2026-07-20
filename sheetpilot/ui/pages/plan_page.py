@@ -77,7 +77,8 @@ class PlanPage(QWidget):
         local_planner_layout = QVBoxLayout(local_planner)
         vocabulary = QLabel(
             "Local vocabulary: trim/strip text, collapse spaces, normalize text case, "
-            "sort one named column, or mark/remove exact duplicates. Separate steps with "
+            "standardize common values, filter with one explicit condition, sort named "
+            "columns, or mark/remove exact duplicates. Separate steps with "
             '"then", a semicolon, or a new line.'
         )
         vocabulary.setWordWrap(True)

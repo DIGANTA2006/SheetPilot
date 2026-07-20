@@ -304,7 +304,7 @@ def _validate_rule(
         require_columns(frame, [rule.column])
         issue = _issue_from_mask(
             frame,
-            ~pl.col(rule.column).is_in(rule.values),
+            ~pl.col(rule.column).is_in(rule.values, nulls_equal=True),
             code="value_not_allowed",
             message="Values outside the approved list were detected.",
             column=rule.column,
@@ -325,7 +325,7 @@ def _validate_rule(
         require_columns(frame, [rule.column])
         issue = _issue_from_mask(
             frame,
-            ~pl.col(rule.column).is_in(rule.allowed_keys),
+            ~pl.col(rule.column).is_in(rule.allowed_keys, nulls_equal=True),
             code="missing_lookup",
             message="Lookup keys are missing from the approved lookup set.",
             column=rule.column,
@@ -455,4 +455,5 @@ class ValidateDataOperation(TabularOperation[ValidateDataParameters]):
             auxiliary_tables={"Validation Issues": issue_table},
             warnings=tuple(issue.message for issue in report.issues),
             metrics={"checks_run": report.checks_run, "validation_errors": report.error_count},
+            validation_report=report,
         )

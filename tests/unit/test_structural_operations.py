@@ -118,6 +118,15 @@ def test_fuzzy_matching_only_marks_review_groups() -> None:
     assert result.warnings
 
 
+def test_fuzzy_matching_rejects_quadratic_work_above_budget() -> None:
+    frame = pl.DataFrame({"Name": [f"Person {index}" for index in range(1_500)]})
+    with pytest.raises(InvalidPlanError, match="comparison budget"):
+        FuzzyDuplicateReviewOperation().execute(
+            frame,
+            FuzzyReviewParameters(columns=["Name"], max_rows=2_000),
+        )
+
+
 def _columns(frame: pl.DataFrame, actions: list[dict[str, Any]]) -> pl.DataFrame:
     parameters = ColumnTransformParameters.model_validate({"actions": actions})
     return ColumnTransformOperation().execute(frame, parameters).frame
@@ -431,6 +440,33 @@ def test_all_validation_rule_families_report_aggregate_issues() -> None:
         "formula_error",
     } <= codes
     assert result.metrics["validation_errors"] >= 11
+
+
+def test_allowed_and_lookup_rules_treat_null_as_a_real_value() -> None:
+    frame = pl.DataFrame({"Status": [None], "Lookup": [None]})
+    rejecting = ValidateDataParameters.model_validate(
+        {
+            "rules": [
+                {"kind": "allowed_values", "column": "Status", "values": ["A"]},
+                {"kind": "missing_lookup", "column": "Lookup", "allowed_keys": ["known"]},
+            ]
+        }
+    )
+    rejected = ValidateDataOperation().execute(frame, rejecting)
+    assert set(rejected.auxiliary_tables["Validation Issues"].get_column("Code")) == {
+        "value_not_allowed",
+        "missing_lookup",
+    }
+
+    accepting = ValidateDataParameters.model_validate(
+        {
+            "rules": [
+                {"kind": "allowed_values", "column": "Status", "values": [None]},
+                {"kind": "missing_lookup", "column": "Lookup", "allowed_keys": [None]},
+            ]
+        }
+    )
+    assert ValidateDataOperation().execute(frame, accepting).metrics["validation_errors"] == 0
 
 
 @pytest.mark.parametrize(

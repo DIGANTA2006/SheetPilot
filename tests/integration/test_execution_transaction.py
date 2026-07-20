@@ -497,6 +497,56 @@ def test_failed_validation_is_not_published_as_complete(tmp_path: Path) -> None:
     assert len(failed) == 1
 
 
+def test_failed_quality_validate_step_is_not_published_as_complete(tmp_path: Path) -> None:
+    source = tmp_path / "source.csv"
+    original = "ID,Name\n1,\n"
+    source.write_text(original, encoding="utf-8")
+    source_id = uuid4()
+    fingerprint = fingerprint_file(source)
+    plan = OperationPlan(
+        job_name="Validate with a plan step",
+        source_files=[
+            SourceReference(source_id=source_id, file_name=source.name, sha256=fingerprint.sha256)
+        ],
+        steps=[
+            PlanStep(
+                step_id="validate-required-name",
+                operation="quality.validate",
+                parameters={"rules": [{"kind": "required_fields", "columns": ["Name"]}]},
+                target=StepTarget(source_id=source_id, sheet="CSV", columns=["Name"]),
+                explanation="Require a customer name before publication.",
+            )
+        ],
+        output=OutputSettings(
+            output_name="step_validated",
+            format="xlsx",
+            preserve_formatting=False,
+        ),
+    )
+    binding = SourceBinding(source_id=source_id, path=source, fingerprint=fingerprint)
+    registry = build_default_registry()
+    preview, run = PreviewEngine(registry).generate(plan, (binding,))
+
+    assert preview.steps[0].warnings == ("Required values are missing.",)
+    assert len(run.validation_reports) == 1
+    assert not run.validation_reports[0].passed
+
+    with pytest.raises(OutputFailureError, match="retained only as a failed artifact"):
+        JobExecutor(_config(tmp_path), registry).execute(
+            plan,
+            (binding,),
+            preview,
+            _approve(plan, preview.preview_digest),
+            tmp_path / "output",
+        )
+
+    assert source.read_text(encoding="utf-8") == original
+    assert not (tmp_path / "output" / "step_validated.xlsx").exists()
+    assert not (tmp_path / "output" / "step_validated.audit.json").exists()
+    failed = list((tmp_path / "output" / "SheetPilot Failed").rglob("*.xlsx"))
+    assert len(failed) == 1
+
+
 def test_formula_retention_uses_generated_formula_cells(tmp_path: Path) -> None:
     source = tmp_path / "sales.csv"
     source.write_text("Qty,Price\n2,5\n", encoding="utf-8")

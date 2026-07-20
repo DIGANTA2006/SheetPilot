@@ -97,6 +97,18 @@ class OutputFailureError(SheetPilotError):
     code = "output_failure"
 
 
+class FormulaPreservationRiskError(OutputFailureError):
+    """An existing workbook formula cannot be preserved without ambiguity."""
+
+    code = "formula_preservation_risk"
+
+
+class WorkbookFeaturePreservationRiskError(OutputFailureError):
+    """An existing workbook feature cannot be rewritten without loss."""
+
+    code = "workbook_feature_preservation_risk"
+
+
 class StorageError(SheetPilotError):
     """Local metadata could not be read or written safely."""
 

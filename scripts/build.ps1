@@ -1,17 +1,23 @@
 [CmdletBinding()]
 param(
     [switch]$SkipSetup,
-    [switch]$SkipChecks
+    [switch]$SkipChecks,
+    [switch]$InstallPythonIfMissing
 )
 
 $ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $Python = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
 $GeneratedRoot = Join-Path $ProjectRoot 'build\generated'
 $IconPath = Join-Path $GeneratedRoot 'SheetPilot.ico'
 
+if (-not $SkipSetup) {
+    & (Join-Path $PSScriptRoot 'setup.ps1') `
+        -InstallPythonIfMissing:$InstallPythonIfMissing
+}
 if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
-    throw 'The repository .venv is required to build SheetPilot.'
+    throw 'The project .venv is required to build SheetPilot; run scripts\setup.ps1 first.'
 }
 $PythonVersion = & $Python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
 if ($LASTEXITCODE -ne 0 -or $PythonVersion.Trim() -ne '3.12') {
@@ -26,10 +32,6 @@ if ($LASTEXITCODE -ne 0 -or $PythonBits.Trim() -ne '64') {
     throw "SheetPilot Windows releases require 64-bit Python; the repository .venv reported $PythonBits-bit."
 }
 
-if (-not $SkipSetup) {
-    & (Join-Path $PSScriptRoot 'setup.ps1')
-    if ($LASTEXITCODE -ne 0) { throw 'Environment setup failed.' }
-}
 if (-not $SkipChecks) {
     & (Join-Path $PSScriptRoot 'test.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'Quality gate failed.' }

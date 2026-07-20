@@ -6,14 +6,31 @@ import argparse
 import multiprocessing
 import sys
 from collections.abc import Sequence
+from typing import Any
 
-from PySide6.QtWidgets import QApplication, QWidget
-
-from sheetpilot.app.bootstrap import build_context, build_main_window
 from sheetpilot.app.workflow_self_test import (
     run_invalid_workflow_self_test,
     run_normal_workflow_self_test,
 )
+
+QApplication: Any = None
+build_context: Any = None
+build_main_window: Any = None
+
+
+def _load_ui_dependencies() -> None:
+    """Import Qt only for modes that actually create a desktop window."""
+    global QApplication, build_context, build_main_window
+    if QApplication is None:
+        from PySide6.QtWidgets import QApplication as QtApplication
+
+        QApplication = QtApplication
+    if build_context is None or build_main_window is None:
+        from sheetpilot.app.bootstrap import build_context as context_builder
+        from sheetpilot.app.bootstrap import build_main_window as window_builder
+
+        build_context = context_builder
+        build_main_window = window_builder
 
 
 def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespace:
@@ -38,7 +55,7 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
     return parser.parse_args(arguments)
 
 
-def run_startup_smoke(application: QApplication, window: QWidget) -> int:
+def run_startup_smoke(application: Any, window: Any) -> int:
     """Exercise Qt and the fully composed main window, then exit immediately."""
     window.show()
     application.processEvents()
@@ -61,6 +78,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
     if options.invalid_workflow_self_test:
         run_invalid_workflow_self_test()
         return 0
+    _load_ui_dependencies()
     application = QApplication.instance()
     if not isinstance(application, QApplication):
         application = QApplication(sys.argv[:1])
@@ -69,7 +87,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
     if options.smoke_test:
         return run_startup_smoke(application, window)
     window.show()
-    return application.exec()
+    return int(application.exec())
 
 
 if __name__ == "__main__":

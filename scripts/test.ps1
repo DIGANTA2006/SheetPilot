@@ -2,11 +2,25 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $Python = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
 
 if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
     throw 'The repository .venv is required to run the quality gate.'
+}
+try {
+    & $Python -c (
+        'import struct, sys; ' +
+        'assert sys.version_info[:2] == (3, 12) and sys.platform == "win32"; ' +
+        'assert struct.calcsize("P") * 8 == 64'
+    ) 2>$null
+}
+catch {
+    throw 'The project .venv is unusable; run scripts\setup.ps1 to repair it.'
+}
+if ($LASTEXITCODE -ne 0) {
+    throw 'The project .venv is unusable; run scripts\setup.ps1 to repair it.'
 }
 
 Push-Location $ProjectRoot

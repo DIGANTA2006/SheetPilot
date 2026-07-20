@@ -29,12 +29,13 @@ and deterministic-ID column actions, static arithmetic/percentage/quantity-price
 difference/age/classification/group/running-total/lookup calculations, summary statistics,
 and typed quality/reconciliation rules. Plans cannot provide executable formulas or code.
 
-Phase 3C completes the deterministic engine layer with strict/union table merges,
+Phase 3C provides tested deterministic services for strict/union table merges,
 category-to-sheet and workbook splitting, selected-sheet export, CSV merge and
 CSV-to-Excel, sheet rename and summary-copy workflows, formula-injection-safe CSV/XLSX
 writers, polished new workbooks, copy-only style-preserving edits, trusted DuckDB unions,
-and structured formula templates. Formula text is generated only by application code;
-plans never contain raw Excel formulas.
+and structured formula templates. The desktop plan currently exposes the registered table
+operations; several whole-file workflow services still require dedicated UI. Formula text
+is generated only by application code; plans never contain raw Excel formulas.
 
 Phase 4 adds the transactional workflow: deterministic previews and change digests,
 step-specific destructive confirmation, practical per-cell rejection, source rehashing,
@@ -58,8 +59,9 @@ provides saved-workflow, template, history, validation, settings, and offline he
 Successful plans can be saved without client paths, hashes, rows, or upload consents, then
 rebound to newly analysed files and reviewed through the same preview and approval flow.
 
-Phase 7 adds an offline instruction planner for an intentionally small, documented
-vocabulary of text cleaning, sorting, and exact duplicate handling. Generated proposals
+Phase 7 adds an offline instruction planner for a deliberately bounded, documented
+vocabulary of text cleaning, value standardization, row filtering, multi-column sorting,
+and exact duplicate handling. Generated proposals
 contain restricted schema-validated JSON only, stay separate from execution, remain bound
 to analysed source identities, and require explicit digest-bound human approval before
 preview. The provider abstraction, bounded JSON parser, metadata disclosure manifest,
@@ -99,23 +101,46 @@ races. Plan and provider-request integrity checks are stricter, invalid ranges a
 file names are rejected early, formula retention preserves calculation semantics, and the
 configured history-retention policy is applied automatically.
 
+Version 0.1.2 closes additional validation and resource-exhaustion gaps. CSV formula
+neutralization now covers headers as well as values, null allowlist checks fail closed,
+fuzzy matching has an explicit comparison budget, and preview rejects output schemas that
+Excel would reject later. It also expands the safe offline planner, creates `.venv`
+automatically, and adds a single-command launcher.
+
+Version 0.1.3 prevents successful-looking workbook corruption: existing formulas are
+retained only when their exact formula text and coordinates survive the approved plan, and
+formula movement or merged-sheet replacement now fails with a typed preservation error.
+`quality.validate` step failures are part of the execution gate instead of warnings only.
+This release also repairs stale virtual environments, isolates frozen self-tests from real
+user history, applies saved output settings on first launch, produces a checksum-bearing
+release ZIP, and adds a transactional cumulative PowerShell source upgrader.
+
 ## Development setup
 
-The project requires 64-bit Python 3.12 on Windows and uses the repository `.venv`.
+The project requires 64-bit Python 3.12 on Windows. The launcher discovers it, safely
+recreates a stale project `.venv`, installs the locked environment, and starts SheetPilot.
+Use a process-scoped execution-policy bypass when Windows blocks local scripts; the scripts
+never change the machine-wide policy.
 
 ```powershell
-.\scripts\setup.ps1
-.\.venv\Scripts\python.exe -m sheetpilot.app.main
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-SheetPilot.ps1 -InstallPythonIfMissing
 ```
+
+To apply this cumulative release to a newly extracted older SheetPilot source ZIP, verify
+the script hash you received and run:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Upgrade-SheetPilot-0.1.3.ps1 -InstallPythonIfMissing -BuildRelease
+```
+
+The upgrader verifies its embedded payload, refuses unexpected local modifications unless
+`-Force` is explicitly supplied, keeps changed-file backups outside the project, restores
+source files if setup/check/build fails, and is safe to rerun.
 
 Quality checks:
 
 ```powershell
-.\.venv\Scripts\python.exe -m ruff format --check .
-.\.venv\Scripts\python.exe -m ruff check .
-.\.venv\Scripts\python.exe -m mypy sheetpilot
-.\.venv\Scripts\python.exe -m pytest
-.\.venv\Scripts\python.exe -m bandit -c pyproject.toml -r sheetpilot
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test.ps1
 ```
 
 ## Windows one-folder package
@@ -124,25 +149,37 @@ Run the locked quality gate, build, executable self-tests, PE/version checks, an
 generation with:
 
 ```powershell
-.\scripts\package.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package.ps1 -InstallPythonIfMissing
 ```
 
 The development build is written to `dist\SheetPilot\SheetPilot.exe`. The versioned
 checksum-bearing release is written to
-`release\SheetPilot-0.1.1-win64\SheetPilot.exe`; distribute the complete folder, not the
-executable alone.
+`release\SheetPilot-0.1.3-win64\SheetPilot.exe`. The distributable archive and its sidecar
+digest are `release\SheetPilot-0.1.3-win64.zip` and
+`release\SheetPilot-0.1.3-win64.zip.sha256`.
 
 ## Known limitations
 
 - A separate clean Windows machine without Python has not yet completed the manual release
   checklist, so this repository should not be described as production-ready.
 - No remote planning provider or credential adapter is bundled. The offline rule parser
-  intentionally supports only documented cleaning, sorting, and exact-duplicate clauses.
+  intentionally supports only documented cleaning, standardization, filtering, sorting,
+  and exact-duplicate clauses.
+- Existing formulas are preserved only when the approved workflow leaves their exact text
+  and cell coordinates intact. Plans that would move/rebase formulas, and table replacement
+  on merged sheets, fail closed and require a different output strategy.
+- Top-level validation rules currently target the plan's primary result table. Use an
+  explicit `quality.validate` step for each additional sheet that must gate publication.
 - Real Excel recalculation and PDF export are exercised on this development machine.
   Approved pivot and trusted-macro paths are covered with controlled fakes and synthetic
   macro-preservation fixtures; no real macro was executed.
 - Advanced Excel COM actions are currently a typed service API rather than a dedicated
   desktop screen. All normal CSV/XLSX processing remains available without Excel.
+- Whole-file merge/split/rename/export services are tested APIs but do not yet have complete
+  desktop workflow screens.
+- Release scripts and executables are not Authenticode-signed unless a trusted signing step
+  is applied outside this repository; SHA-256 manifests provide integrity, not publisher
+  identity.
 - Legacy `.xls`, `.xlsb`, `.ods`, scanned PDFs/OCR, and browser automation are deferred.
 
 ## Safety boundary

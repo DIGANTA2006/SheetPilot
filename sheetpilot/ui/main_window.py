@@ -214,7 +214,7 @@ class MainWindow(QMainWindow):
         self.templates_page.library_changed.connect(self.saved_workflows_page.refresh)
         self.job_history_page.repeat_requested.connect(self._repeat_history_job)
         self.settings_page.settings_saved.connect(self._refresh_persistence_pages)
-        self._show_stage(0)
+        self._new_job()
 
     def _show_stage(self, index: int) -> None:
         self.stack.setCurrentIndex(index)

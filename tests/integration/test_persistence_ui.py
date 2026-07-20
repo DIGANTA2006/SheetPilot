@@ -23,7 +23,7 @@ from sheetpilot.core.plan_schema import (
 from sheetpilot.core.preview_engine import ExecutionApproval, PreviewEngine
 from sheetpilot.operations.registry import build_default_registry
 from sheetpilot.storage.database import Database
-from sheetpilot.storage.models import JobStatus, WorkflowTemplate
+from sheetpilot.storage.models import JobStatus, SettingKey, WorkflowTemplate
 from sheetpilot.ui.main_window import MainWindow
 from sheetpilot.ui.pages.results_page import ResultsPage
 from sheetpilot.ui.workflow_models import JobDraft, PreparedJob, prepare_job
@@ -94,6 +94,25 @@ def _prepared_cleanup(source: Path, config: AppConfig, *, output_name: str) -> P
         ).model_dump()
     )
     return PreparedJob(draft=prepared.draft, plan=plan, bindings=prepared.bindings)
+
+
+def test_saved_default_output_directory_is_applied_on_initial_startup(
+    tmp_path: Path,
+    qtbot: QtBot,
+) -> None:
+    config = _config(tmp_path)
+    services = _services(config)
+    services.settings.set(SettingKey.DEFAULT_OUTPUT_DIRECTORY, str(tmp_path))
+
+    window = MainWindow(
+        FileProfiler(config.limits),
+        config=config,
+        registry=build_default_registry(),
+        persistence=services,
+    )
+    qtbot.addWidget(window)
+
+    assert window.analysis_page.output_directory.text() == str(tmp_path.resolve())
 
 
 def test_navigation_cannot_reset_sources_during_active_analysis(

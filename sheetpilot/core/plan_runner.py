@@ -16,9 +16,11 @@ from sheetpilot.core.operation_registry import OperationRegistry
 from sheetpilot.core.plan_schema import OperationPlan, PlanStep
 from sheetpilot.core.plan_validator import PlanValidator
 from sheetpilot.operations.merging import MergeTablesOperation, MergeTablesParameters
-from sheetpilot.operations.tabular import TableOperationResult
+from sheetpilot.operations.tabular import TableOperationResult, validate_table_columns
+from sheetpilot.operations.validation import ValidationReport
 
 ROW_ID_COLUMN = "_sheetpilot_preview_row_id"
+_INTERNAL_COLUMN_PREFIX = "_sheetpilot_"
 
 
 @dataclass(frozen=True, order=True)
@@ -43,18 +45,29 @@ class PlanRunResult:
     changes: tuple[ChangeRecord, ...]
     total_change_count: int
     steps: tuple[StepRunSummary, ...]
+    validation_reports: tuple[ValidationReport, ...]
 
 
 def _with_row_ids(frame: pl.DataFrame, *, offset: int = 1) -> pl.DataFrame:
-    if ROW_ID_COLUMN in frame.columns:
-        raise InvalidPlanError(f"Input contains a reserved column: {ROW_ID_COLUMN}")
+    reserved = [
+        column for column in frame.columns if column.casefold().startswith(_INTERNAL_COLUMN_PREFIX)
+    ]
+    if reserved:
+        raise InvalidPlanError(f"Input contains a reserved column: {reserved[0]}")
     return frame.with_row_index(ROW_ID_COLUMN, offset=offset).with_columns(
         pl.col(ROW_ID_COLUMN).cast(pl.UInt64)
     )
 
 
 def strip_internal_columns(frame: pl.DataFrame) -> pl.DataFrame:
-    return frame.drop(ROW_ID_COLUMN) if ROW_ID_COLUMN in frame.columns else frame
+    internal = [
+        column for column in frame.columns if column.casefold().startswith(_INTERNAL_COLUMN_PREFIX)
+    ]
+    return frame.drop(internal) if internal else frame
+
+
+def _validate_plan_table(frame: pl.DataFrame) -> None:
+    validate_table_columns(frame, excluded_prefixes=(_INTERNAL_COLUMN_PREFIX,))
 
 
 def _same(left: Any, right: Any) -> bool:
@@ -330,6 +343,7 @@ class PlanRunner:
         tables: dict[DatasetKey, pl.DataFrame] = {}
         next_row_id = 1
         for key in sorted(input_tables):
+            validate_table_columns(input_tables[key])
             frame = _with_row_ids(input_tables[key], offset=next_row_id)
             tables[key] = frame
             next_row_id += frame.height
@@ -337,6 +351,7 @@ class PlanRunner:
         source_names = {source.source_id: source.file_name for source in plan.source_files}
         collector = _ChangeCollector(self.max_preview_records)
         summaries: list[StepRunSummary] = []
+        validation_reports: list[ValidationReport] = []
         for step in plan.steps:
             if not step.enabled:
                 continue
@@ -362,7 +377,14 @@ class PlanRunner:
                 raw_result = operation.execute(before, parameters)
             if not isinstance(raw_result, TableOperationResult):
                 raise InvalidPlanError("The registered operation returned an invalid result type.")
+            if raw_result.validation_report is not None:
+                if not isinstance(raw_result.validation_report, ValidationReport):
+                    raise InvalidPlanError(
+                        "The registered operation returned an invalid validation report."
+                    )
+                validation_reports.append(raw_result.validation_report)
             after = raw_result.frame
+            _validate_plan_table(after)
             if ROW_ID_COLUMN not in after.columns and after.height == before.height:
                 after = after.with_columns(before.get_column(ROW_ID_COLUMN))
             elif ROW_ID_COLUMN not in after.columns:
@@ -387,6 +409,7 @@ class PlanRunner:
                         f"An operation created a duplicate table name: {table_name}"
                     )
                 auxiliary = strip_internal_columns(auxiliary)
+                validate_table_columns(auxiliary)
                 tables[auxiliary_key] = _with_row_ids(auxiliary, offset=next_row_id)
                 next_row_id += auxiliary.height
                 _capture_diff(
@@ -413,4 +436,5 @@ class PlanRunner:
             changes=tuple(collector.records),
             total_change_count=collector.total,
             steps=tuple(summaries),
+            validation_reports=tuple(validation_reports),
         )

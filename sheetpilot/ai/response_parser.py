@@ -38,7 +38,13 @@ def _validate_tree(value: object, *, depth: int = 0, nodes: list[int] | None = N
 
 def parse_planner_response(response_text: str) -> PlannerResponse:
     """Accept one bounded JSON object and reject prose, Markdown, and unknown fields."""
-    if len(response_text.encode("utf-8")) > _MAX_RESPONSE_BYTES:
+    try:
+        response_size = len(response_text.encode("utf-8"))
+    except UnicodeError as error:
+        raise InvalidPlanError(
+            "The planning provider did not return valid Unicode text."
+        ) from error
+    if response_size > _MAX_RESPONSE_BYTES:
         raise InvalidPlanError("The provider response exceeds the allowed size.")
     try:
         payload: Any = json.loads(response_text, parse_constant=_invalid_constant)

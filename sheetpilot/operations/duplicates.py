@@ -184,6 +184,7 @@ class FuzzyReviewParameters(OperationParameters):
     threshold: float = Field(default=0.88, ge=0.5, le=1.0)
     marker_column: str = "Fuzzy Review Group"
     max_rows: int = Field(default=10_000, gt=0, le=25_000)
+    max_comparisons: int = Field(default=1_000_000, gt=0, le=5_000_000)
 
 
 def _normalized_fuzzy_text(row: dict[str, Any], columns: list[str]) -> str:
@@ -208,6 +209,12 @@ class FuzzyDuplicateReviewOperation(TabularOperation[FuzzyReviewParameters]):
             raise InvalidPlanError("Fuzzy review is limited to the configured review row count.")
         rows = list(data.iter_rows(named=True))
         texts = [_normalized_fuzzy_text(row, parameters.columns) for row in rows]
+        required_comparisons = len(texts) * (len(texts) - 1) // 2
+        if required_comparisons > parameters.max_comparisons:
+            raise InvalidPlanError(
+                "Fuzzy review exceeds the configured comparison budget; filter or split the "
+                "data before fuzzy matching."
+            )
         parents = list(range(len(rows)))
 
         def find(index: int) -> int:

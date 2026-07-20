@@ -21,6 +21,7 @@ from sheetpilot.ai.planner import (
 )
 from sheetpilot.ai.privacy_filter import DisclosureLevel, PrivacyConsentError
 from sheetpilot.ai.provider import PreparedProviderCall, ProviderCallApproval, ProviderRequest
+from sheetpilot.ai.response_parser import parse_planner_response
 from sheetpilot.core.exceptions import InvalidPlanError
 from sheetpilot.core.plan_schema import (
     OutputSettings,
@@ -153,6 +154,37 @@ def test_local_rule_parser_marks_removal_destructive() -> None:
     assert step.operation == "duplicates.handle"
     assert step.destructive
     assert step.confirmation_required
+
+
+def test_local_rule_parser_supports_standardization_multi_sort_and_filters() -> None:
+    proposal = RuleBasedPlanner(build_default_registry()).plan(
+        make_request(
+            "Standardize Email then sort by Created, Name descending then keep rows where "
+            "Amount >= 100"
+        )
+    )
+    standardize, sort, filter_rows = proposal.plan.steps
+    assert standardize.operation == "values.standardize"
+    assert standardize.parameters == {
+        "column": "Email",
+        "mode": "email",
+        "invalid_policy": "leave",
+    }
+    assert [key["column"] for key in sort.parameters["keys"]] == ["Created", "Name"]
+    assert all(key["descending"] for key in sort.parameters["keys"])
+    assert filter_rows.operation == "rows.filter"
+    assert filter_rows.parameters["conditions"] == [
+        {"kind": "numeric", "column": "Amount", "operator": "ge", "value": 100.0}
+    ]
+    assert filter_rows.destructive
+    assert filter_rows.confirmation_required
+
+
+def test_local_filter_requires_an_explicit_supported_condition() -> None:
+    with pytest.raises(InvalidPlanError, match="supported local filter"):
+        RuleBasedPlanner(build_default_registry()).plan(
+            make_request("Keep rows where Email equals customer@example.com")
+        )
 
 
 def test_local_rule_parser_rejects_unknown_or_ambiguous_clauses() -> None:
@@ -329,6 +361,11 @@ def test_provider_markdown_and_extra_plan_metadata_are_rejected() -> None:
         prepared = planner.prepare(request)
         with pytest.raises(InvalidPlanError):
             planner.generate(prepared, approve_provider_disclosure(prepared, approved=True))
+
+
+def test_provider_response_rejects_invalid_unicode_without_leaking_encoder_errors() -> None:
+    with pytest.raises(InvalidPlanError, match="valid Unicode"):
+        parse_planner_response("\ud800")
 
 
 def test_plan_approval_rejects_a_different_digest() -> None:

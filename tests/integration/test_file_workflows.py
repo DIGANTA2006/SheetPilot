@@ -5,10 +5,12 @@ from pathlib import Path
 
 import openpyxl
 import polars as pl
+import pytest
 from openpyxl.comments import Comment
 from openpyxl.styles import PatternFill
 from pydantic import ValidationError
 
+from sheetpilot.core.exceptions import InvalidPlanError
 from sheetpilot.core.file_workflows import SpreadsheetWorkflowService
 from sheetpilot.engines.csv_engine import write_safe_csv
 from sheetpilot.engines.duckdb_engine import DuckDBEngine
@@ -27,10 +29,11 @@ from sheetpilot.security.hashing import fingerprint_file
 
 
 def test_safe_csv_and_polished_xlsx_exports_never_execute_text(tmp_path: Path) -> None:
-    frame = pl.DataFrame({"Payload": ["=2+2"], "Qty": [2], "Price": [5]})
+    frame = pl.DataFrame({"=Payload": ["=2+2"], "Qty": [2], "Price": [5]})
     csv_path = write_safe_csv(frame, tmp_path / "safe.csv")
     with csv_path.open("r", encoding="utf-8-sig", newline="") as stream:
         rows = list(csv.reader(stream))
+    assert rows[0][0] == "'=Payload"
     assert rows[1][0] == "'=2+2"
 
     xlsx_path = write_new_workbook(
@@ -59,6 +62,13 @@ def test_safe_csv_and_polished_xlsx_exports_never_execute_text(tmp_path: Path) -
         assert sheet["A1"].fill.fgColor.rgb == "FF1D4ED8"
     finally:
         workbook.close()
+
+
+def test_exports_reject_case_insensitive_column_collisions(tmp_path: Path) -> None:
+    destination = tmp_path / "unsafe.csv"
+    with pytest.raises(InvalidPlanError, match="unique without regard to letter case"):
+        write_safe_csv(pl.DataFrame({"Name": ["Ada"], "name": ["Grace"]}), destination)
+    assert not destination.exists()
 
 
 def test_structured_formula_schema_rejects_raw_formula() -> None:

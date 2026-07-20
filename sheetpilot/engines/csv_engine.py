@@ -8,18 +8,20 @@ from pathlib import Path
 import polars as pl
 
 from sheetpilot.core.exceptions import OutputCollisionError
+from sheetpilot.operations.tabular import validate_table_columns
 from sheetpilot.security.formula_guard import neutralize_formula_text
 
 
 def write_safe_csv(frame: pl.DataFrame, destination: Path) -> Path:
     """Write text safely for spreadsheet import without overwriting a file."""
+    validate_table_columns(frame)
     if destination.exists():
         raise OutputCollisionError("CSV export cannot overwrite an existing file.")
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
         with destination.open("x", encoding="utf-8-sig", newline="") as stream:
             writer = csv.writer(stream, lineterminator="\n")
-            writer.writerow(frame.columns)
+            writer.writerow([neutralize_formula_text(column) for column in frame.columns])
             for row in frame.iter_rows():
                 writer.writerow(
                     [

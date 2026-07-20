@@ -86,18 +86,28 @@ def test_release_scripts_enforce_platform_gates_and_frozen_evidence() -> None:
     setup_script = (PROJECT_ROOT / "scripts" / "setup.ps1").read_text(encoding="utf-8")
     build_script = (PROJECT_ROOT / "scripts" / "build.ps1").read_text(encoding="utf-8")
     package_script = (PROJECT_ROOT / "scripts" / "package.ps1").read_text(encoding="utf-8")
+    start_script = (PROJECT_ROOT / "Start-SheetPilot.ps1").read_text(encoding="utf-8")
 
     assert "pip install --disable-pip-version-check --requirement $LockFile" in setup_script
     assert "-m pip check" in setup_script
+    assert "Test-CompatiblePython -Path $Python" in setup_script
+    assert "Quarantined an unusable project environment" in setup_script
     for script in (setup_script, build_script):
         assert "-ne 'win32'" in script
         assert "-ne '64'" in script
 
+    assert build_script.index("'setup.ps1'") < build_script.index("Test-Path -LiteralPath $Python")
     assert "SheetPilot.spec" in build_script
     assert "--noconfirm --clean" in build_script
     assert "--smoke-test" in package_script
     assert "--workflow-self-test" in package_script
     assert "--invalid-workflow-self-test" in package_script
     assert "$env:SHEETPILOT_FROZEN_EXE = $ReleaseExecutable" in package_script
+    assert "$env:SHEETPILOT_DATA_DIR = $SelfTestData" in package_script
+    assert "status --porcelain --untracked-files=all" in package_script
+    assert "CreateFromDirectory" in package_script
+    assert "README-FIRST.txt" in package_script
     assert "Get-FileHash" in package_script
     assert "SHA256SUMS.txt" in package_script
+    assert "import PySide6, polars, pydantic, sheetpilot" in start_script
+    assert "Set-ExecutionPolicy" not in start_script

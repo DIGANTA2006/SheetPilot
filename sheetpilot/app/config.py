@@ -37,8 +37,12 @@ class AppConfig(BaseModel):
 
     @classmethod
     def default(cls) -> AppConfig:
-        local = os.environ.get("LOCALAPPDATA")
-        base = Path(local) / "SheetPilot" if local else Path.home() / ".sheetpilot"
+        override = os.environ.get("SHEETPILOT_DATA_DIR")
+        if override:
+            base = Path(override).expanduser().resolve()
+        else:
+            local = os.environ.get("LOCALAPPDATA")
+            base = Path(local) / "SheetPilot" if local else Path.home() / ".sheetpilot"
         return cls(
             data_dir=base,
             backup_dir=base / "backups",

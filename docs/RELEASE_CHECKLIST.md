@@ -10,13 +10,17 @@
 - Confirm the packaged PE machine is AMD64 and its file/product versions match
   `sheetpilot\app\version.py`.
 - Verify every file against `SHA256SUMS.txt` after transferring the release folder.
+- Verify the outer `SheetPilot-<version>-win64.zip` against its `.zip.sha256` sidecar before
+  extraction; a sidecar distributed from the same untrusted location is not proof of publisher identity.
 - Confirm the release contains no `.env`, client workbook, SQLite database, log, backup, or temp file.
+- Confirm frozen self-tests use a disposable `SHEETPILOT_DATA_DIR` and do not create or prune
+  the tester's normal `%LOCALAPPDATA%\SheetPilot` history.
 
 ## Clean-machine verification
 
 Use a supported Windows 10 or Windows 11 machine without Python installed:
 
-1. Copy the complete `SheetPilot-0.1.0-win64` folder; do not copy only the executable.
+1. Extract the complete `SheetPilot-0.1.3-win64.zip`; do not copy only the executable.
 2. Verify `SHA256SUMS.txt` with an independent SHA-256 tool.
 3. Run `SheetPilot.exe --smoke-test`, `SheetPilot.exe --workflow-self-test`, and
    `SheetPilot.exe --invalid-workflow-self-test` from PowerShell; require exit code zero for
