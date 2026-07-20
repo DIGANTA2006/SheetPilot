@@ -25,6 +25,7 @@ from sheetpilot.ai.provider import (
     PlanningProvider,
     PreparedProviderCall,
     ProviderCallApproval,
+    provider_request_digest,
 )
 from sheetpilot.ai.response_parser import parse_planner_response
 from sheetpilot.ai.rule_based_parser import parse_local_instruction
@@ -63,7 +64,7 @@ def _parameter_column_references(operation: str, parameters: Mapping[str, object
     def visit(value: object) -> None:
         if isinstance(value, Mapping):
             action_kind = value.get("kind")
-            if operation == "column.transform" and action_kind == "rename":
+            if operation == "columns.transform" and action_kind == "rename":
                 rename_mapping = value.get("mapping")
                 if isinstance(rename_mapping, Mapping):
                     references.update(str(column) for column in rename_mapping)
@@ -74,7 +75,7 @@ def _parameter_column_references(operation: str, parameters: Mapping[str, object
                 elif key_text in _MULTIPLE_COLUMN_PARAMETER_KEYS and isinstance(nested, Sequence):
                     references.update(item for item in nested if isinstance(item, str))
                 elif (
-                    (key_text == "source" and operation == "column.transform")
+                    (key_text == "source" and operation == "columns.transform")
                     or (key_text == "source_column" and operation == "calculate.column")
                 ) and isinstance(nested, str):
                     references.add(nested)
@@ -246,6 +247,12 @@ class AIPlanner:
         approval: ProviderCallApproval,
     ) -> PlanProposal:
         """Dispatch an approved payload and return an unapproved plan proposal."""
+        if prepared.disclosure.provider_request_digest != provider_request_digest(
+            prepared.provider_request
+        ):
+            raise InvalidPlanError(
+                "The provider request changed after disclosure; approval is invalid."
+            )
         if prepared.disclosure.provider_id != self._provider.provider_id:
             raise InvalidPlanError("The prepared request belongs to a different provider.")
         if prepared.disclosure.remote != self._provider.is_remote:

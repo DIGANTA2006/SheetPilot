@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from datetime import date, datetime
 from enum import StrEnum
 from functools import reduce
@@ -10,7 +9,7 @@ from operator import and_, or_
 from typing import Annotated, Literal
 
 import polars as pl
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from sheetpilot.operations.base import OperationParameters
 from sheetpilot.operations.tabular import TableOperationResult, TabularOperation, require_columns
@@ -53,6 +52,12 @@ class DateRangeCondition(OperationParameters):
     start: date | None = None
     end: date | None = None
 
+    @model_validator(mode="after")
+    def ordered_range(self) -> DateRangeCondition:
+        if self.start is not None and self.end is not None and self.start > self.end:
+            raise ValueError("date-range start cannot be after end")
+        return self
+
 
 class BlankCondition(OperationParameters):
     kind: Literal["blank"]
@@ -93,9 +98,9 @@ def _text_expression(condition: TextCondition) -> pl.Expr:
     value = condition.value
     if not condition.case_sensitive:
         expression = expression.str.to_lowercase()
-        value = value.casefold()
+        value = value.lower()
     if condition.kind == "contains":
-        return expression.str.contains(re.escape(value), literal=True)
+        return expression.str.contains(value, literal=True)
     if condition.kind == "starts_with":
         return expression.str.starts_with(value)
     return expression.str.ends_with(value)
@@ -146,7 +151,7 @@ def _condition_expression(condition: FilterCondition, schema: pl.Schema) -> pl.E
             pl.col(condition.column).cast(pl.String, strict=False).str.strip_chars() == ""
         )
         return blank if condition.is_blank else ~blank
-    listed = pl.col(condition.column).is_in(condition.values)
+    listed = pl.col(condition.column).is_in(condition.values, nulls_equal=True)
     return listed if condition.kind == "include_values" else ~listed
 
 

@@ -4,6 +4,7 @@ import json
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from sheetpilot.ai.models import (
     PlanApproval,
@@ -19,7 +20,7 @@ from sheetpilot.ai.planner import (
     approve_provider_disclosure,
 )
 from sheetpilot.ai.privacy_filter import DisclosureLevel, PrivacyConsentError
-from sheetpilot.ai.provider import ProviderCallApproval, ProviderRequest
+from sheetpilot.ai.provider import PreparedProviderCall, ProviderCallApproval, ProviderRequest
 from sheetpilot.core.exceptions import InvalidPlanError
 from sheetpilot.core.plan_schema import (
     OutputSettings,
@@ -197,6 +198,27 @@ def test_provider_call_requires_digest_bound_disclosure_approval() -> None:
     assert proposal.plan.output == request.output
 
 
+def test_prepared_provider_call_rejects_content_not_bound_to_manifest() -> None:
+    request = ai_request()
+    provider = FakeProvider(response_json(request))
+    prepared = AIPlanner(build_default_registry(), provider).prepare(request)
+    tampered_request = prepared.provider_request.model_copy(
+        update={"context_json": '{"instruction":"unreviewed"}'}
+    )
+
+    with pytest.raises(ValidationError, match="digest"):
+        PreparedProviderCall(
+            planning_request=prepared.planning_request,
+            provider_request=tampered_request,
+            disclosure=prepared.disclosure,
+        )
+
+    tampered_prepared = prepared.model_copy(update={"provider_request": tampered_request})
+    approval = approve_provider_disclosure(tampered_prepared, approved=True)
+    with pytest.raises(InvalidPlanError, match="changed after disclosure"):
+        AIPlanner(build_default_registry(), provider).generate(tampered_prepared, approval)
+
+
 def test_provider_receives_redacted_metadata_without_client_filename() -> None:
     request = ai_request("Trim Name for ada@example.com or +91 98765 43210")
     provider = FakeProvider(response_json(request))
@@ -349,6 +371,27 @@ def test_provider_parameter_columns_must_exist_in_analysed_sheet() -> None:
             request,
             column="Name",
             parameters={"columns": ["Missing"], "actions": [{"kind": "trim"}]},
+        )
+    )
+    planner = AIPlanner(build_default_registry(), provider)
+    prepared = planner.prepare(request)
+
+    with pytest.raises(InvalidPlanError, match="parameters reference an unanalysed column"):
+        planner.generate(prepared, approve_provider_disclosure(prepared, approved=True))
+
+
+def test_provider_column_rename_sources_must_exist_in_analysed_sheet() -> None:
+    request = ai_request()
+    provider = FakeProvider(
+        response_json(
+            request,
+            column="Name",
+            operation="columns.transform",
+            parameters={
+                "actions": [
+                    {"kind": "rename", "mapping": {"Missing": "Renamed"}},
+                ]
+            },
         )
     )
     planner = AIPlanner(build_default_registry(), provider)

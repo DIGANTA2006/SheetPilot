@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
 from sheetpilot.core.backup_service import BackupService
-from sheetpilot.core.exceptions import OutputCollisionError, PathSecurityError, SourceChangedError
+from sheetpilot.core.exceptions import (
+    BackupError,
+    OutputCollisionError,
+    PathSecurityError,
+    SourceChangedError,
+)
 from sheetpilot.core.workspace import IsolatedWorkspace
 from sheetpilot.security.formula_guard import is_formula_injection, neutralize_formula_text
 from sheetpilot.security.hashing import fingerprint_file, verify_fingerprint
@@ -81,3 +87,25 @@ def test_backup_restore_and_workspace_preserve_source(tmp_path: Path) -> None:
     restored = service.restore_to_new_file(receipt, tmp_path / "restored.csv")
     assert restored.read_bytes() == original
     assert source.read_bytes() == original
+
+
+def test_restore_does_not_overwrite_a_destination_created_during_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.csv"
+    source.write_text("ID\n1\n", encoding="utf-8")
+    service = BackupService(tmp_path / "backups")
+    receipt = service.create_backup(source, job_id=uuid4())
+    destination = tmp_path / "restored.csv"
+    real_copy = shutil.copy2
+
+    def raced_copy(source_path: Path, partial_path: Path) -> Path:
+        copied = real_copy(source_path, partial_path)
+        destination.write_text("created by another process", encoding="utf-8")
+        return copied
+
+    monkeypatch.setattr("sheetpilot.core.backup_service.shutil.copy2", raced_copy)
+
+    with pytest.raises(BackupError):
+        service.restore_to_new_file(receipt, destination)
+    assert destination.read_text(encoding="utf-8") == "created by another process"

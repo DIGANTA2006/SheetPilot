@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime
 from typing import Protocol
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from sheetpilot.ai.models import FrozenStrictModel, PlanningRequest
 
@@ -28,6 +30,17 @@ class ProviderRequest(FrozenStrictModel):
     context_json: str = Field(min_length=2, max_length=500_000)
     operation_catalog_json: str = Field(min_length=2, max_length=500_000)
     response_schema_json: str = Field(min_length=2, max_length=500_000)
+
+
+def provider_request_digest(request: ProviderRequest) -> str:
+    """Return the canonical digest shown in the disclosure approval screen."""
+    canonical = json.dumps(
+        request.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 class DisclosureScope(str):
@@ -53,6 +66,14 @@ class PreparedProviderCall(FrozenStrictModel):
     planning_request: PlanningRequest
     provider_request: ProviderRequest
     disclosure: DisclosureManifest
+
+    @model_validator(mode="after")
+    def disclosure_matches_request(self) -> PreparedProviderCall:
+        if self.disclosure.provider_request_digest != provider_request_digest(
+            self.provider_request
+        ):
+            raise ValueError("provider request digest does not match the disclosure manifest")
+        return self
 
 
 class ProviderCallApproval(FrozenStrictModel):

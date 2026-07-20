@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from sheetpilot.core.operation_registry import OperationRegistry
 from sheetpilot.storage.database import Database
+from sheetpilot.storage.models import SettingKey, utc_now
 from sheetpilot.storage.repositories import (
     JobHistoryRepository,
     SettingsRepository,
@@ -25,6 +27,15 @@ class PersistenceServices:
     settings: SettingsRepository
     workflows: WorkflowTemplateService
     jobs: JobHistoryService
+
+    def prune_expired_history(self, *, now: datetime | None = None) -> int:
+        """Apply the configured terminal-history retention policy."""
+        configured = self.settings.get(SettingKey.HISTORY_RETENTION_DAYS)
+        retention_days = configured if type(configured) is int else 365
+        current = now or utc_now()
+        if current.tzinfo is None:
+            raise ValueError("history maintenance requires a timezone-aware timestamp")
+        return self.history.prune_completed_before(current - timedelta(days=retention_days))
 
     @classmethod
     def build(

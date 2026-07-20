@@ -91,6 +91,14 @@ preservation, backup manifests, atomic output, reopen validation, reconciliation
 aggregate audit. The invalid test proves an unknown operation creates no output, backup,
 or audit artifact.
 
+Version 0.1.1 adds a professional hardening pass based on adversarial regression testing:
+literal text filters now behave correctly, duplicate handling ignores private preview
+metadata, cross-worksheet row identities remain unique through merges, output sheet-name
+collisions cannot discard tables, and atomic publication fails closed during destination
+races. Plan and provider-request integrity checks are stricter, invalid ranges and unsafe
+file names are rejected early, formula retention preserves calculation semantics, and the
+configured history-retention policy is applied automatically.
+
 ## Development setup
 
 The project requires 64-bit Python 3.12 on Windows and uses the repository `.venv`.
@@ -121,7 +129,7 @@ generation with:
 
 The development build is written to `dist\SheetPilot\SheetPilot.exe`. The versioned
 checksum-bearing release is written to
-`release\SheetPilot-0.1.0-win64\SheetPilot.exe`; distribute the complete folder, not the
+`release\SheetPilot-0.1.1-win64\SheetPilot.exe`; distribute the complete folder, not the
 executable alone.
 
 ## Known limitations

@@ -38,16 +38,19 @@ class StepRunSummary:
 
 @dataclass(frozen=True)
 class PlanRunResult:
+    original_tables: dict[DatasetKey, pl.DataFrame]
     tables: dict[DatasetKey, pl.DataFrame]
     changes: tuple[ChangeRecord, ...]
     total_change_count: int
     steps: tuple[StepRunSummary, ...]
 
 
-def _with_row_ids(frame: pl.DataFrame) -> pl.DataFrame:
+def _with_row_ids(frame: pl.DataFrame, *, offset: int = 1) -> pl.DataFrame:
     if ROW_ID_COLUMN in frame.columns:
         raise InvalidPlanError(f"Input contains a reserved column: {ROW_ID_COLUMN}")
-    return frame.with_row_index(ROW_ID_COLUMN, offset=1)
+    return frame.with_row_index(ROW_ID_COLUMN, offset=offset).with_columns(
+        pl.col(ROW_ID_COLUMN).cast(pl.UInt64)
+    )
 
 
 def strip_internal_columns(frame: pl.DataFrame) -> pl.DataFrame:
@@ -143,9 +146,51 @@ def _rows_by_id(frame: pl.DataFrame) -> tuple[dict[int, dict[str, Any]], list[in
     order: list[int] = []
     for row in frame.iter_rows(named=True):
         row_id = int(row[ROW_ID_COLUMN])
+        if row_id in rows:
+            raise InvalidPlanError("Stable row metadata contains duplicate identifiers.")
         rows[row_id] = row
         order.append(row_id)
     return (rows, order)
+
+
+def _contains_reserved_name(value: Any) -> bool:
+    if isinstance(value, str):
+        return value == ROW_ID_COLUMN
+    if isinstance(value, dict):
+        return any(
+            _contains_reserved_name(key) or _contains_reserved_name(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return any(_contains_reserved_name(item) for item in value)
+    return False
+
+
+def _validated_row_ids(frame: pl.DataFrame) -> list[int]:
+    values = frame.get_column(ROW_ID_COLUMN).to_list()
+    if any(isinstance(value, bool) or not isinstance(value, int) or value < 1 for value in values):
+        raise InvalidPlanError("Stable row metadata is invalid.")
+    return [int(value) for value in values]
+
+
+def _repair_duplicate_row_ids(frame: pl.DataFrame, *, next_row_id: int) -> tuple[pl.DataFrame, int]:
+    """Keep the first identity and allocate fresh IDs for copied row instances."""
+    values = _validated_row_ids(frame)
+    if values:
+        next_row_id = max(next_row_id, max(values) + 1)
+    seen: set[int] = set()
+    repaired: list[int] = []
+    changed = False
+    for value in values:
+        if value in seen:
+            value = next_row_id
+            next_row_id += 1
+            changed = True
+        seen.add(value)
+        repaired.append(value)
+    if changed:
+        frame = frame.with_columns(pl.Series(ROW_ID_COLUMN, repaired, dtype=pl.UInt64))
+    return (frame, next_row_id)
 
 
 def _capture_diff(
@@ -282,7 +327,13 @@ class PlanRunner:
         input_tables: dict[DatasetKey, pl.DataFrame],
     ) -> PlanRunResult:
         typed_parameters = PlanValidator(self.registry).validate(plan)
-        tables = {key: _with_row_ids(frame) for key, frame in input_tables.items()}
+        tables: dict[DatasetKey, pl.DataFrame] = {}
+        next_row_id = 1
+        for key in sorted(input_tables):
+            frame = _with_row_ids(input_tables[key], offset=next_row_id)
+            tables[key] = frame
+            next_row_id += frame.height
+        original_tables = dict(tables)
         source_names = {source.source_id: source.file_name for source in plan.source_files}
         collector = _ChangeCollector(self.max_preview_records)
         summaries: list[StepRunSummary] = []
@@ -296,6 +347,8 @@ class PlanRunner:
                 raise InvalidPlanError(f"Target columns are missing: {', '.join(missing_targets)}")
             operation = self.registry.get(step.operation)
             parameters = typed_parameters[step.step_id]
+            if _contains_reserved_name(parameters.model_dump(mode="python")):
+                raise InvalidPlanError("A plan cannot reference reserved row metadata.")
             if isinstance(operation, MergeTablesOperation):
                 if not isinstance(parameters, MergeTablesParameters):
                     raise InvalidPlanError("Merge parameters failed typed validation.")
@@ -312,6 +365,10 @@ class PlanRunner:
             after = raw_result.frame
             if ROW_ID_COLUMN not in after.columns and after.height == before.height:
                 after = after.with_columns(before.get_column(ROW_ID_COLUMN))
+            elif ROW_ID_COLUMN not in after.columns:
+                after = _with_row_ids(after, offset=next_row_id)
+                next_row_id += after.height
+            after, next_row_id = _repair_duplicate_row_ids(after, next_row_id=next_row_id)
             tables[key] = after
             before_total = collector.total
             _capture_diff(
@@ -329,7 +386,9 @@ class PlanRunner:
                     raise InvalidPlanError(
                         f"An operation created a duplicate table name: {table_name}"
                     )
-                tables[auxiliary_key] = _with_row_ids(auxiliary)
+                auxiliary = strip_internal_columns(auxiliary)
+                tables[auxiliary_key] = _with_row_ids(auxiliary, offset=next_row_id)
+                next_row_id += auxiliary.height
                 _capture_diff(
                     pl.DataFrame(schema=strip_internal_columns(auxiliary).schema),
                     tables[auxiliary_key],
@@ -349,6 +408,7 @@ class PlanRunner:
                 )
             )
         return PlanRunResult(
+            original_tables=original_tables,
             tables=tables,
             changes=tuple(collector.records),
             total_change_count=collector.total,

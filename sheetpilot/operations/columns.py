@@ -165,7 +165,11 @@ def _combine(frame: pl.DataFrame, action: CombineColumnsAction) -> pl.DataFrame:
     )
     values: list[str] = []
     for row in frame.select(action.columns).iter_rows():
-        parts = [str(value) for value in row if value is not None or not action.skip_nulls]
+        parts = [
+            str(value) if value is not None else ""
+            for value in row
+            if value is not None or not action.skip_nulls
+        ]
         values.append(action.delimiter.join(parts))
     result = frame.with_columns(pl.Series(action.output, values, dtype=pl.String))
     drops = [column for column in action.columns if action.drop_sources and column != action.output]

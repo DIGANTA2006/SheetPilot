@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict
 
 from sheetpilot.core.exceptions import OutputCollisionError, OutputFailureError
+from sheetpilot.core.no_clobber import publish_new_file
 from sheetpilot.security.hashing import FileFingerprint, fingerprint_file
 from sheetpilot.security.path_guard import ensure_within
 
@@ -80,13 +81,15 @@ class AtomicOutputWriter:
             fingerprint = fingerprint_file(stage)
             if pre_commit is not None:
                 pre_commit()
-            if final.exists():
-                raise OutputCollisionError("Another process created the output destination.")
             try:
-                stage.rename(final)
+                publish_new_file(stage, final)
             except FileExistsError as error:
                 raise OutputCollisionError(
                     "Another process created the output destination."
+                ) from error
+            except OSError as error:
+                raise OutputFailureError(
+                    "The filesystem could not safely publish the validated output."
                 ) from error
             return AtomicOutputReceipt(
                 path=final,

@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import ValidationError
 
+from sheetpilot.app.persistence import PersistenceServices
 from sheetpilot.core.exceptions import StorageError
 from sheetpilot.core.plan_schema import (
     OperationPlan,
@@ -418,6 +419,31 @@ def test_job_history_filters_and_prunes_only_terminal_records(database: Database
     assert repository.prune_completed_before(now - timedelta(days=1)) == 1
     assert repository.get(terminal_id) is None
     assert repository.get(active_id) is not None
+
+
+def test_configured_history_retention_is_applied_by_maintenance(database: Database) -> None:
+    services = PersistenceServices.build(database, build_default_registry())
+    services.settings.set(SettingKey.HISTORY_RETENTION_DAYS, 5)
+    now = datetime.now(UTC)
+    old = now - timedelta(days=10)
+    old_id = uuid4()
+    recent_id = uuid4()
+    for job_id, completed_at in ((old_id, old), (recent_id, now - timedelta(days=1))):
+        services.history.save(
+            JobHistoryRecord(
+                job_id=job_id,
+                name="Retention test",
+                status=JobStatus.CANCELLED,
+                created_at=completed_at,
+                completed_at=completed_at,
+                source_files=(FileHistoryMetadata(file_name="input.csv", sha256="d" * 64),),
+                application_version="0.1.0",
+            )
+        )
+
+    assert services.prune_expired_history(now=now) == 1
+    assert services.history.get(old_id) is None
+    assert services.history.get(recent_id) is not None
 
 
 def test_job_history_rejects_regressions_and_terminal_overwrites(database: Database) -> None:

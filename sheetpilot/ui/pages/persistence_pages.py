@@ -543,7 +543,15 @@ class SettingsPage(QWidget):
         except (SheetPilotError, ValueError) as error:
             self.status.setText(f"Settings could not be saved: {error}")
             return
-        self.status.setText("Settings saved locally.")
+        try:
+            pruned = self._services.prune_expired_history()
+        except (SheetPilotError, ValueError) as error:
+            self.status.setText(
+                f"Settings saved, but expired history could not be removed: {error}"
+            )
+            self.settings_saved.emit()
+            return
+        self.status.setText(f"Settings saved locally. Removed {pruned} expired history record(s).")
         self.settings_saved.emit()
 
     def _browse_output_directory(self) -> None:

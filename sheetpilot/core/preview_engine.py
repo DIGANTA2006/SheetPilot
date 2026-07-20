@@ -256,7 +256,9 @@ def apply_cell_rejections(
 ) -> dict[DatasetKey, pl.DataFrame]:
     """Restore explicitly rejected cell changes by stable internal row ID."""
     tables = dict(run.tables)
-    for change in preview.changes:
+    # Undo later transformations first so rejecting several sequential edits to the
+    # same cell restores the value that existed before the earliest rejected edit.
+    for change in reversed(preview.changes):
         if change.change_id not in approval.rejected_change_ids:
             continue
         if (

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -50,6 +51,8 @@ from sheetpilot.ui.workflow_models import (
     prepare_job,
 )
 
+_LOGGER = logging.getLogger(__name__)
+
 
 class MainWindow(QMainWindow):
     """Coordinate protected jobs and privacy-conscious local persistence screens."""
@@ -89,6 +92,10 @@ class MainWindow(QMainWindow):
             database.initialize()
             persistence = PersistenceServices.build(database, self._registry)
         self._persistence = persistence
+        try:
+            self._persistence.prune_expired_history()
+        except (SheetPilotError, ValueError):
+            _LOGGER.warning("Configured history maintenance failed.", exc_info=True)
         self._prepared: PreparedJob | None = None
         self._plan: OperationPlan | None = None
         self._pending_template: WorkflowTemplate | None = None

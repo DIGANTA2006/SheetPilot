@@ -8,7 +8,7 @@ from enum import StrEnum
 from typing import Annotated, Literal
 
 import polars as pl
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 
 from sheetpilot.core.exceptions import InvalidPlanError
 from sheetpilot.operations.base import OperationParameters
@@ -30,6 +30,12 @@ class TelephoneRule(OperationParameters):
     min_digits: int = Field(default=10, ge=1, le=20)
     max_digits: int = Field(default=15, ge=1, le=20)
 
+    @model_validator(mode="after")
+    def valid_digit_range(self) -> TelephoneRule:
+        if self.min_digits > self.max_digits:
+            raise ValueError("minimum telephone digits cannot exceed maximum digits")
+        return self
+
 
 class EmailRule(OperationParameters):
     kind: Literal["email"]
@@ -42,12 +48,24 @@ class DateRangeRule(OperationParameters):
     minimum: date | None = None
     maximum: date | None = None
 
+    @model_validator(mode="after")
+    def valid_date_range(self) -> DateRangeRule:
+        if self.minimum is not None and self.maximum is not None and self.minimum > self.maximum:
+            raise ValueError("minimum date cannot be after maximum date")
+        return self
+
 
 class NumericRangeRule(OperationParameters):
     kind: Literal["numeric_range"]
     column: str
     minimum: float | None = None
     maximum: float | None = None
+
+    @model_validator(mode="after")
+    def valid_numeric_range(self) -> NumericRangeRule:
+        if self.minimum is not None and self.maximum is not None and self.minimum > self.maximum:
+            raise ValueError("minimum value cannot exceed maximum value")
+        return self
 
 
 class AllowedValuesRule(OperationParameters):

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class StrictModel(BaseModel):
@@ -38,6 +39,18 @@ class SourceReference(StrictModel):
     file_name: str = Field(min_length=1, max_length=255)
     sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     sheet_names: list[str] = Field(default_factory=list)
+
+    @field_validator("file_name")
+    @classmethod
+    def require_plain_file_name(cls, value: str) -> str:
+        if (
+            value in {".", ".."}
+            or "\x00" in value
+            or PurePosixPath(value).name != value
+            or PureWindowsPath(value).name != value
+        ):
+            raise ValueError("source metadata requires a plain file name")
+        return value
 
 
 class StepTarget(StrictModel):
@@ -76,6 +89,18 @@ class OutputSettings(StrictModel):
     format: OutputFormat
     preserve_formatting: bool = True
     retain_calculation_formulas: bool = False
+
+    @field_validator("output_name")
+    @classmethod
+    def require_plain_output_name(cls, value: str) -> str:
+        if (
+            value in {".", ".."}
+            or "\x00" in value
+            or PurePosixPath(value).name != value
+            or PureWindowsPath(value).name != value
+        ):
+            raise ValueError("output_name requires a plain file name")
+        return value
 
 
 class PrivacyMetadata(StrictModel):
@@ -117,7 +142,10 @@ class OperationPlan(StrictModel):
                     raise ValueError(f"unknown step dependency: {dependency}")
                 if positions[dependency] >= index:
                     raise ValueError("step dependencies must refer to earlier steps")
-        source_ids = {source.source_id for source in self.source_files}
+        source_id_list = [source.source_id for source in self.source_files]
+        source_ids = set(source_id_list)
+        if len(source_id_list) != len(source_ids):
+            raise ValueError("source IDs must be unique")
         if any(step.target.source_id not in source_ids for step in self.steps):
             raise ValueError("step target must reference a source in the plan")
         return self

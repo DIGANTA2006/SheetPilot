@@ -14,6 +14,8 @@ from sheetpilot.core.exceptions import InvalidPlanError
 from sheetpilot.operations.base import OperationParameters
 from sheetpilot.operations.tabular import TableOperationResult, TabularOperation, require_columns
 
+_PREVIEW_ROW_ID = "_sheetpilot_preview_row_id"
+
 
 class DuplicateMode(StrEnum):
     MARK = "mark"
@@ -91,9 +93,14 @@ def _merge_value(values: list[Any], rule: ComplementaryMergeRule) -> Any:
 
 
 def _merge_complementary(
-    data: pl.DataFrame, keys: list[str], rules: list[ComplementaryMergeRule]
+    data: pl.DataFrame,
+    keys: list[str],
+    rules: list[ComplementaryMergeRule],
+    keep: KeepRule,
 ) -> pl.DataFrame:
-    non_key_columns = [column for column in data.columns if column not in keys]
+    non_key_columns = [
+        column for column in data.columns if column not in keys and column != _PREVIEW_ROW_ID
+    ]
     rule_columns = [rule.column for rule in rules]
     if set(rule_columns) != set(non_key_columns) or len(rule_columns) != len(set(rule_columns)):
         raise InvalidPlanError(
@@ -105,9 +112,13 @@ def _merge_complementary(
         grouped.setdefault(_key(row, keys), []).append(row)
     merged: list[dict[str, Any]] = []
     for group in grouped.values():
-        output = {column: group[0][column] for column in keys}
-        for column in non_key_columns:
-            output[column] = _merge_value([row[column] for row in group], by_column[column])
+        chosen = group[0] if keep == KeepRule.FIRST else group[-1]
+        output: dict[str, Any] = {}
+        for column in data.columns:
+            if column in keys or column == _PREVIEW_ROW_ID:
+                output[column] = chosen[column]
+            else:
+                output[column] = _merge_value([row[column] for row in group], by_column[column])
         merged.append(output)
     return pl.DataFrame(merged, schema=data.schema)
 
@@ -122,7 +133,11 @@ class HandleDuplicatesOperation(TabularOperation[DuplicateParameters]):
         return parameters.mode != DuplicateMode.MARK
 
     def execute(self, data: pl.DataFrame, parameters: DuplicateParameters) -> TableOperationResult:
-        keys = parameters.keys or list(data.columns)
+        if _PREVIEW_ROW_ID in parameters.keys:
+            raise InvalidPlanError("Internal preview identity cannot be a duplicate key.")
+        keys = parameters.keys or [column for column in data.columns if column != _PREVIEW_ROW_ID]
+        if not keys:
+            raise InvalidPlanError("Duplicate handling requires at least one client column.")
         require_columns(data, keys)
         rows = list(data.iter_rows(named=True))
         kept, moved, marked = _duplicate_indices(rows, keys, parameters.keep)
@@ -138,7 +153,7 @@ class HandleDuplicatesOperation(TabularOperation[DuplicateParameters]):
                 metrics={"duplicate_rows": duplicate_count, "duplicate_group_rows": len(marked)},
             )
         if parameters.mode == DuplicateMode.MERGE_COMPLEMENTARY:
-            result = _merge_complementary(data, keys, parameters.merge_rules)
+            result = _merge_complementary(data, keys, parameters.merge_rules, parameters.keep)
             return TableOperationResult(
                 frame=result,
                 metrics={

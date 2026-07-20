@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import math
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime, time
@@ -12,7 +10,11 @@ from pathlib import PurePath
 from uuid import UUID
 
 from sheetpilot.ai.models import PlanningRequest
-from sheetpilot.ai.provider import DisclosureManifest, ProviderRequest
+from sheetpilot.ai.provider import (
+    DisclosureManifest,
+    ProviderRequest,
+    provider_request_digest,
+)
 from sheetpilot.core.exceptions import SecurityError
 from sheetpilot.core.plan_schema import PrivacyMode
 from sheetpilot.security.privacy import REDACTED, redact, redact_text
@@ -36,16 +38,6 @@ class PrivacyConsentError(SecurityError):
     """A provider disclosure lacks the consent required by the privacy mode."""
 
     code = "privacy_consent_required"
-
-
-def _request_digest(request: ProviderRequest) -> str:
-    canonical = json.dumps(
-        request.model_dump(mode="json"),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _file_label(index: int, file_name: str) -> str:
@@ -215,5 +207,5 @@ def disclosure_manifest(
         sheet_count=sum(len(source.sheets) for source in request.sources),
         sample_row_count=sample_row_count,
         includes_raw_values=level == DisclosureLevel.RAW_SAMPLES,
-        provider_request_digest=_request_digest(provider_request),
+        provider_request_digest=provider_request_digest(provider_request),
     )

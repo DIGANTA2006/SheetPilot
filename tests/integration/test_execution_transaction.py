@@ -13,6 +13,7 @@ from sheetpilot.app.config import AppConfig
 from sheetpilot.core.exceptions import InvalidPlanError, OutputFailureError, SourceChangedError
 from sheetpilot.core.executor import JobExecutor
 from sheetpilot.core.operation_registry import OperationRegistry
+from sheetpilot.core.plan_runner import ROW_ID_COLUMN, DatasetKey
 from sheetpilot.core.plan_schema import (
     OperationPlan,
     OutputSettings,
@@ -141,6 +142,214 @@ def test_individual_cell_rejection_is_applied_by_stable_row_id(tmp_path: Path) -
     values = pl.read_csv(result.output.path).get_column("Name").to_list()
     assert values == [" Ada ", "Grace"]
     assert result.reconciliation.rows_changed == 1
+
+
+def test_multiple_rejections_on_one_cell_restore_the_initial_value(tmp_path: Path) -> None:
+    source = tmp_path / "client.csv"
+    source.write_text("Name\nA\n", encoding="utf-8")
+    source_id = uuid4()
+    fingerprint = fingerprint_file(source)
+    plan = OperationPlan(
+        job_name="Reject chained changes",
+        source_files=[
+            SourceReference(
+                source_id=source_id,
+                file_name=source.name,
+                sha256=fingerprint.sha256,
+                sheet_names=["CSV"],
+            )
+        ],
+        steps=[
+            PlanStep(
+                step_id="first",
+                operation="text.clean",
+                parameters={
+                    "columns": ["Name"],
+                    "actions": [{"kind": "replace", "find": "A", "replacement": "B"}],
+                },
+                target=StepTarget(source_id=source_id, sheet="CSV", columns=["Name"]),
+                explanation="Apply the first reviewed replacement",
+            ),
+            PlanStep(
+                step_id="second",
+                operation="text.clean",
+                parameters={
+                    "columns": ["Name"],
+                    "actions": [{"kind": "replace", "find": "B", "replacement": "C"}],
+                },
+                target=StepTarget(source_id=source_id, sheet="CSV", columns=["Name"]),
+                explanation="Apply the second reviewed replacement",
+                depends_on=["first"],
+            ),
+        ],
+        output=OutputSettings(output_name="rejected", format="csv"),
+    )
+    binding = SourceBinding(source_id=source_id, path=source, fingerprint=fingerprint)
+    registry = build_default_registry()
+    preview, _ = PreviewEngine(registry).generate(plan, (binding,))
+
+    result = JobExecutor(_config(tmp_path), registry).execute(
+        plan,
+        (binding,),
+        preview,
+        _approve(
+            plan,
+            preview.preview_digest,
+            rejected_change_ids=frozenset(change.change_id for change in preview.changes),
+        ),
+        tmp_path / "output",
+    )
+
+    assert pl.read_csv(result.output.path).item(0, "Name") == "A"
+    assert result.reconciliation.rows_changed == 0
+
+
+def test_sources_with_the_same_filename_export_to_distinct_sheets(tmp_path: Path) -> None:
+    first = tmp_path / "first" / "client.csv"
+    second = tmp_path / "second" / "client.csv"
+    first.parent.mkdir()
+    second.parent.mkdir()
+    first.write_text("ID\n1\n", encoding="utf-8")
+    second.write_text("ID\n2\n", encoding="utf-8")
+    first_id, second_id = uuid4(), uuid4()
+    first_fingerprint = fingerprint_file(first)
+    second_fingerprint = fingerprint_file(second)
+    plan = OperationPlan(
+        job_name="Same-name source export",
+        source_files=[
+            SourceReference(
+                source_id=first_id,
+                file_name=first.name,
+                sha256=first_fingerprint.sha256,
+                sheet_names=["CSV"],
+            ),
+            SourceReference(
+                source_id=second_id,
+                file_name=second.name,
+                sha256=second_fingerprint.sha256,
+                sheet_names=["CSV"],
+            ),
+        ],
+        output=OutputSettings(output_name="combined", format="xlsx"),
+    )
+    bindings = (
+        SourceBinding(source_id=first_id, path=first, fingerprint=first_fingerprint),
+        SourceBinding(source_id=second_id, path=second, fingerprint=second_fingerprint),
+    )
+    registry = build_default_registry()
+    preview, _ = PreviewEngine(registry).generate(plan, bindings)
+
+    result = JobExecutor(_config(tmp_path), registry).execute(
+        plan,
+        bindings,
+        preview,
+        _approve(plan, preview.preview_digest),
+        tmp_path / "output",
+    )
+
+    workbook = openpyxl.load_workbook(result.output.path, data_only=True)
+    try:
+        assert workbook.sheetnames == ["client - CSV", "client - CSV (2)"]
+        assert {workbook[name]["A2"].value for name in workbook.sheetnames} == {1, 2}
+    finally:
+        workbook.close()
+
+
+def test_merge_assigns_unique_row_identity_across_worksheets(tmp_path: Path) -> None:
+    source = tmp_path / "multi.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "North"
+    workbook["North"].append(["ID"])
+    workbook["North"].append([1])
+    workbook.create_sheet("South").append(["ID"])
+    workbook["South"].append([2])
+    workbook.save(source)
+    workbook.close()
+    source_id = uuid4()
+    fingerprint = fingerprint_file(source)
+    plan = OperationPlan(
+        job_name="Merge regions",
+        source_files=[
+            SourceReference(
+                source_id=source_id,
+                file_name=source.name,
+                sha256=fingerprint.sha256,
+                sheet_names=["North", "South"],
+            )
+        ],
+        steps=[
+            PlanStep(
+                step_id="merge",
+                operation="tables.merge",
+                parameters={"table_names": ["North", "South"]},
+                target=StepTarget(source_id=source_id, sheet="North"),
+                explanation="Merge the selected regional worksheets",
+            )
+        ],
+        output=OutputSettings(output_name="merged", format="xlsx"),
+    )
+    binding = SourceBinding(source_id=source_id, path=source, fingerprint=fingerprint)
+
+    preview, run = PreviewEngine(build_default_registry()).generate(plan, (binding,))
+
+    merged = run.tables[DatasetKey(source_id, "North")]
+    identities = merged.get_column(ROW_ID_COLUMN).to_list()
+    assert identities == list(dict.fromkeys(identities))
+    assert preview.total_change_count == 1
+
+
+def test_non_day_date_difference_remains_static_when_formulas_requested(tmp_path: Path) -> None:
+    source = tmp_path / "dates.csv"
+    source.write_text("Start,End\n2026-01-31,2026-02-01\n", encoding="utf-8")
+    source_id = uuid4()
+    fingerprint = fingerprint_file(source)
+    plan = OperationPlan(
+        job_name="Month difference",
+        source_files=[
+            SourceReference(source_id=source_id, file_name=source.name, sha256=fingerprint.sha256)
+        ],
+        steps=[
+            PlanStep(
+                step_id="months",
+                operation="calculate.column",
+                parameters={
+                    "action": {
+                        "kind": "date_difference",
+                        "output": "Months",
+                        "start_column": "Start",
+                        "end_column": "End",
+                        "unit": "months",
+                    }
+                },
+                target=StepTarget(source_id=source_id, sheet="CSV", columns=["Start", "End"]),
+                explanation="Calculate the complete calendar-month difference",
+            )
+        ],
+        output=OutputSettings(
+            output_name="dates",
+            format="xlsx",
+            preserve_formatting=False,
+            retain_calculation_formulas=True,
+        ),
+    )
+    binding = SourceBinding(source_id=source_id, path=source, fingerprint=fingerprint)
+    registry = build_default_registry()
+    preview, _ = PreviewEngine(registry).generate(plan, (binding,))
+
+    result = JobExecutor(_config(tmp_path), registry).execute(
+        plan,
+        (binding,),
+        preview,
+        _approve(plan, preview.preview_digest),
+        tmp_path / "output",
+    )
+
+    workbook = openpyxl.load_workbook(result.output.path, data_only=False)
+    try:
+        assert workbook["CSV"]["C2"].data_type != "f"
+        assert workbook["CSV"]["C2"].value == 1
+    finally:
+        workbook.close()
 
 
 def test_destructive_execution_requires_step_specific_confirmation(tmp_path: Path) -> None:

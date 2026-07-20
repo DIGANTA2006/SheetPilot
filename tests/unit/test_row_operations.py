@@ -157,6 +157,26 @@ def test_filter_condition_variants() -> None:
     ]
 
 
+def test_text_filter_treats_regex_characters_as_literal_text() -> None:
+    frame = pl.DataFrame({"ID": [1, 2, 3], "Text": ["a.b", "a+b", "axb"]})
+
+    assert _filter(frame, {"kind": "contains", "column": "Text", "value": "a.b"}) == [1]
+    assert _filter(frame, {"kind": "contains", "column": "Text", "value": "a+b"}) == [2]
+
+
+def test_excluding_values_keeps_null_unless_null_is_explicitly_excluded() -> None:
+    frame = pl.DataFrame({"ID": [1, 2, 3], "Group": [None, "A", "B"]})
+
+    assert _filter(
+        frame,
+        {"kind": "exclude_values", "column": "Group", "values": ["A"]},
+    ) == [1, 3]
+    assert _filter(
+        frame,
+        {"kind": "exclude_values", "column": "Group", "values": ["A", None]},
+    ) == [3]
+
+
 def test_filter_all_any_and_inverse() -> None:
     frame = pl.DataFrame({"ID": [1, 2, 3], "A": [1, 1, 2], "B": ["x", "y", "y"]})
     parameters = FilterParameters.model_validate(

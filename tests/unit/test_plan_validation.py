@@ -78,10 +78,25 @@ def test_registry_rejects_unknown_operation() -> None:
         validator.validate(make_plan("unknown.operation", value="x"))
 
 
+def test_disabled_steps_still_require_known_safe_operations() -> None:
+    plan = make_plan("unknown.operation", command="ignored")
+    plan.steps[0].enabled = False
+    validator = PlanValidator(OperationRegistry([RenameOperation()]))
+
+    with pytest.raises(InvalidPlanError, match="forbidden"):
+        validator.validate(plan)
+
+
 def test_registry_rejects_unknown_parameter() -> None:
     validator = PlanValidator(OperationRegistry([RenameOperation()]))
     with pytest.raises(InvalidPlanError, match="Invalid parameters"):
         validator.validate(make_plan(old_name="old", new_name="new", unexpected=True))
+
+
+def test_validator_rejects_reserved_internal_column_references() -> None:
+    validator = PlanValidator(OperationRegistry([RenameOperation()]))
+    with pytest.raises(InvalidPlanError, match="Reserved application columns"):
+        validator.validate(make_plan(old_name="_sheetpilot_preview_row_id", new_name="Visible"))
 
 
 @pytest.mark.parametrize("forbidden", ["python", "sql", "command", "formula", "vba"])
@@ -95,3 +110,16 @@ def test_valid_plan_returns_typed_parameters() -> None:
     validator = PlanValidator(OperationRegistry([RenameOperation()]))
     result = validator.validate(make_plan(old_name="old", new_name="new"))
     assert result["rename-1"] == RenameParameters(old_name="old", new_name="new")
+
+
+def test_plan_source_ids_must_be_unique() -> None:
+    payload = make_plan(old_name="old", new_name="new").model_dump(mode="json")
+    payload["source_files"].append(dict(payload["source_files"][0]))
+
+    with pytest.raises(ValidationError, match="source IDs must be unique"):
+        OperationPlan.model_validate(payload)
+
+
+def test_output_name_must_be_a_plain_name() -> None:
+    with pytest.raises(ValidationError, match="plain file name"):
+        OutputSettings(output_name="../escaped", format="csv")

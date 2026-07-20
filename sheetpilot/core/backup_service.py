@@ -5,12 +5,13 @@ from __future__ import annotations
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict
 
 from sheetpilot.app.version import __version__
 from sheetpilot.core.exceptions import BackupError, OutputCollisionError, SheetPilotError
+from sheetpilot.core.no_clobber import publish_new_file
 from sheetpilot.security.hashing import FileFingerprint, fingerprint_file, verify_fingerprint
 from sheetpilot.security.path_guard import ensure_within, sanitize_filename
 
@@ -59,7 +60,7 @@ class BackupService:
         try:
             shutil.copy2(source, partial_path)
             verify_fingerprint(partial_path, source_fingerprint)
-            partial_path.replace(backup_path)
+            publish_new_file(partial_path, backup_path)
             receipt = BackupReceipt(
                 job_id=job_id,
                 source_name=source.name,
@@ -71,7 +72,7 @@ class BackupService:
             )
             manifest_partial = manifest_path.with_suffix(".partial")
             manifest_partial.write_text(receipt.model_dump_json(indent=2), encoding="utf-8")
-            manifest_partial.replace(manifest_path)
+            publish_new_file(manifest_partial, manifest_path)
             return receipt
         except OSError as error:
             partial_path.unlink(missing_ok=True)
@@ -115,11 +116,11 @@ class BackupService:
             raise OutputCollisionError("Restore never overwrites an existing file.")
         verify_fingerprint(receipt.backup_path, receipt.source_fingerprint)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        partial = destination.with_suffix(f"{destination.suffix}.restore.partial")
+        partial = destination.parent / f".{destination.name}.{uuid4().hex}.restore.partial"
         try:
             shutil.copy2(receipt.backup_path, partial)
             verify_fingerprint(partial, receipt.source_fingerprint)
-            partial.replace(destination)
+            publish_new_file(partial, destination)
             return destination
         except OSError as error:
             partial.unlink(missing_ok=True)

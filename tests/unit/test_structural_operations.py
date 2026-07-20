@@ -7,6 +7,7 @@ import polars as pl
 import pytest
 
 from sheetpilot.core.exceptions import InvalidPlanError
+from sheetpilot.core.plan_runner import ROW_ID_COLUMN
 from sheetpilot.operations.calculations import (
     CalculateColumnOperation,
     CalculateColumnParameters,
@@ -27,6 +28,7 @@ from sheetpilot.operations.validation import (
     ValidateDataOperation,
     ValidateDataParameters,
     ValidationContext,
+    parse_quality_rules,
     validate_table,
 )
 
@@ -53,6 +55,25 @@ def test_duplicate_move_and_exact_full_row_mode() -> None:
     )
     assert result.frame.height == 2
     assert result.auxiliary_tables["Duplicate Rows"].height == 1
+
+
+def test_duplicate_handling_ignores_internal_preview_identity() -> None:
+    frame = pl.DataFrame({"ID": [1, 1], "Name": ["same", "same"], ROW_ID_COLUMN: [10, 11]})
+    operation = HandleDuplicatesOperation()
+
+    removed = operation.execute(frame, DuplicateParameters(mode="remove"))
+    assert removed.frame.height == 1
+    assert removed.frame.get_column(ROW_ID_COLUMN).to_list() == [10]
+
+    merged = operation.execute(
+        frame,
+        DuplicateParameters(
+            keys=["ID"],
+            mode="merge_complementary",
+            merge_rules=[{"column": "Name", "strategy": "require_equal"}],
+        ),
+    )
+    assert merged.frame.to_dicts() == [{"ID": 1, "Name": "same", ROW_ID_COLUMN: 10}]
 
 
 def test_complementary_merge_requires_explicit_rules() -> None:
@@ -135,6 +156,19 @@ def test_split_combine_and_extraction_actions() -> None:
         [{"kind": "combine", "columns": ["Last", "First"], "output": "Display", "delimiter": ", "}],
     )
     assert combined.item(0, "Display") == "Lovelace, Ada"
+    with_blanks = _columns(
+        pl.DataFrame({"First": ["Ada"], "Middle": [None], "Last": ["Lovelace"]}),
+        [
+            {
+                "kind": "combine",
+                "columns": ["First", "Middle", "Last"],
+                "output": "Full",
+                "delimiter": "|",
+                "skip_nulls": False,
+            }
+        ],
+    )
+    assert with_blanks.item(0, "Full") == "Ada||Lovelace"
     extracted = _columns(
         combined,
         [
@@ -397,6 +431,24 @@ def test_all_validation_rule_families_report_aggregate_issues() -> None:
         "formula_error",
     } <= codes
     assert result.metrics["validation_errors"] >= 11
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        {"kind": "telephone", "column": "Phone", "min_digits": 15, "max_digits": 10},
+        {
+            "kind": "date_range",
+            "column": "Date",
+            "minimum": "2026-12-31",
+            "maximum": "2026-01-01",
+        },
+        {"kind": "numeric_range", "column": "Amount", "minimum": 100, "maximum": 10},
+    ],
+)
+def test_validation_ranges_reject_inverted_bounds(rule: dict[str, object]) -> None:
+    with pytest.raises(InvalidPlanError, match="Invalid validation rules"):
+        parse_quality_rules([rule])
 
 
 def test_invalid_header_validation_uses_original_headers() -> None:

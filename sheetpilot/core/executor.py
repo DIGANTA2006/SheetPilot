@@ -40,6 +40,7 @@ from sheetpilot.operations.calculations import (
     ArithmeticAction,
     CalculateColumnParameters,
     DateDifferenceAction,
+    DateDifferenceUnit,
     GstAction,
     PercentageAction,
     QuantityPriceAction,
@@ -103,6 +104,8 @@ def _eligible_formula(action: object) -> GeneratedFormulaSpec | None:
             include_base=action.include_base,
         )
     if isinstance(action, DateDifferenceAction):
+        if action.unit != DateDifferenceUnit.DAYS:
+            return None
         return GeneratedFormulaSpec(
             output_column=action.output,
             kind=FormulaKind.DATE_DIFFERENCE,
@@ -154,8 +157,17 @@ def _export_tables(
     multiple_sources = len(source_names) > 1
     output: dict[str, pl.DataFrame] = {}
     formula_output: dict[str, list[GeneratedFormulaSpec]] = {}
+    claimed_names: set[str] = set()
     for key in sorted(tables):
-        name = f"{source_names[key.source_id]} - {key.sheet}" if multiple_sources else key.sheet
+        base_name = (
+            f"{source_names[key.source_id]} - {key.sheet}" if multiple_sources else key.sheet
+        )
+        name = base_name
+        sequence = 2
+        while name.casefold() in claimed_names:
+            name = f"{base_name} ({sequence})"
+            sequence += 1
+        claimed_names.add(name.casefold())
         frame = strip_internal_columns(tables[key])
         eligible: list[GeneratedFormulaSpec] = []
         formula_outputs = {spec.output_column for spec in formulas.get(key, [])}
@@ -280,7 +292,7 @@ class JobExecutor:
                 rule.column for rule in rules if isinstance(rule, TotalReconciliationRule)
             )
             reconciliation = reconcile(
-                original_tables,
+                run.original_tables,
                 final_tables,
                 changes=accepted_changes,
                 total_change_count=run.total_change_count - len(approval.rejected_change_ids),
