@@ -1,0 +1,41 @@
+﻿SheetPilot Output Diagnostic
+============================
+Created: 2026-07-20 18:23:43
+Project: E:\MY PROJECT FOLDER\SheetPilot
+Requested output folder: E:\MY PROJECT FOLDER\SheetPilot\manual_beta_test\output
+Requested output name: dirty_customer_data_cleaned
+
+Branch: main
+Commit: 0757f42
+Source version: 0.1.3
+Git status:
+  ## main
+
+Release executable: E:\MY PROJECT FOLDER\SheetPilot\release\SheetPilot-0.1.3-win64\SheetPilot.exe
+Executable size: 16764331
+Executable modified: 07/20/2026 11:09:49
+Executable version: 
+Version exit code: 0
+
+Resolved output folder: E:\MY PROJECT FOLDER\SheetPilot\manual_beta_test\output
+Folder exists: True
+XLSX already exists: False
+CSV already exists: False
+Audit already exists: False
+Folder write test: True
+
+No files currently exist in the selected output folder.
+No failed/quarantined output was found below the selected output folder.
+
+Application data root: C:\Users\Diganta Chakraborty\AppData\Local\SheetPilot
+Log exists: True
+Database exists: True
+Latest log lines:
+
+Recent database job records:
+  Recent job records:
+
+Normal workflow self-test exit code: 0
+Invalid workflow self-test exit code: 0
+
+- CORE OUTPUT ENGINE PASSED: The packaged executable successfully completed its built-in normal XLSX save transaction. The reported problem is probably specific to the selected plan, validation rules, output name, or output folder—not the core save engine.
