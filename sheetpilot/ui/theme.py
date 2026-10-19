@@ -1,4 +1,4 @@
-﻿"""Application theme tokens for modern light and dark modes."""
+"""Application theme tokens for modern light and dark modes."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-﻿"""Main application window and end-to-end job workflow shell."""
+"""Main application window and end-to-end job workflow shell."""
 
 from __future__ import annotations
 

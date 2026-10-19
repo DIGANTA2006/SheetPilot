@@ -1,0 +1,53 @@
+name: Windows release validation
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-release:
+    name: Build and test Windows x64 release
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.12 x64
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          architecture: "x64"
+
+      - name: Install dependencies, run quality gates, build, and test the release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          & .\scripts\package.ps1 -InstallPythonIfMissing
+          if (-not $?) {
+            throw "The SheetPilot release pipeline failed."
+          }
+
+      - name: Upload validated release archive and checksum
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: SheetPilot-Windows-x64-release
+          path: |
+            release/SheetPilot-*-win64.zip
+            release/SheetPilot-*-win64.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
