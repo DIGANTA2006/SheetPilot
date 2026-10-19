@@ -1,4 +1,4 @@
-"""Main application window and end-to-end job workflow shell."""
+﻿"""Main application window and end-to-end job workflow shell."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ from sheetpilot.ui.pages.persistence_pages import (
 from sheetpilot.ui.pages.plan_page import PlanPage
 from sheetpilot.ui.pages.preview_page import PreviewPage
 from sheetpilot.ui.pages.results_page import ResultsPage
-from sheetpilot.ui.theme import LIGHT_STYLESHEET
+from sheetpilot.ui.theme import get_stylesheet
 from sheetpilot.ui.workflow_models import (
     JobDraft,
     PreparedJob,
@@ -103,12 +103,13 @@ class MainWindow(QMainWindow):
         self._pending_workflow_id: UUID | None = None
         self._active_template: WorkflowTemplate | None = None
         self._active_workflow_id: UUID | None = None
+        self._dark_mode: bool = False
 
         self.setObjectName("mainWindow")
         self.setWindowTitle(f"SheetPilot {__version__}")
         self.setMinimumSize(980, 650)
         self.resize(1280, 800)
-        self.setStyleSheet(LIGHT_STYLESHEET)
+        self.setStyleSheet(get_stylesheet(dark_mode=self._dark_mode))
 
         root = QWidget()
         root_layout = QHBoxLayout(root)
@@ -116,7 +117,7 @@ class MainWindow(QMainWindow):
         root_layout.setSpacing(0)
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(225)
+        sidebar.setFixedWidth(235)
         side_layout = QVBoxLayout(sidebar)
         side_layout.setContentsMargins(18, 24, 18, 24)
         product = QLabel("SheetPilot")
@@ -128,7 +129,20 @@ class MainWindow(QMainWindow):
         self.workflow_stage.setObjectName("workflowStage")
         self.workflow_stage.setWordWrap(True)
         side_layout.addWidget(self.workflow_stage)
-        side_layout.addSpacing(8)
+
+        pill_row = QHBoxLayout()
+        pill_row.setContentsMargins(2, 6, 2, 6)
+        pill_row.setSpacing(6)
+        pills: list[QFrame] = []
+        for _ in self._WORKFLOW_LABELS:
+            pill = QFrame()
+            pill.setObjectName("stagePill")
+            pill_row.addWidget(pill, 1)
+            pills.append(pill)
+        self.stage_pills: tuple[QFrame, ...] = tuple(pills)
+        side_layout.addLayout(pill_row)
+        side_layout.addSpacing(6)
+
         self.nav_buttons: dict[str, QPushButton] = {}
         navigation_group = QButtonGroup(self)
         navigation_group.setExclusive(True)
@@ -143,6 +157,13 @@ class MainWindow(QMainWindow):
             self.nav_buttons[name] = button
             side_layout.addWidget(button)
         side_layout.addStretch(1)
+
+        self.theme_button = QPushButton("Switch to Dark Theme")
+        self.theme_button.setObjectName("themeToggleButton")
+        self.theme_button.clicked.connect(self.toggle_theme)
+        side_layout.addWidget(self.theme_button)
+        side_layout.addSpacing(8)
+
         privacy = QLabel("LOCAL-FIRST\nClient rows are never stored in history")
         privacy.setObjectName("privacyBadge")
         privacy.setWordWrap(True)
@@ -216,9 +237,33 @@ class MainWindow(QMainWindow):
         self.settings_page.settings_saved.connect(self._refresh_persistence_pages)
         self._new_job()
 
+    def toggle_theme(self) -> None:
+        """Toggle between light and dark application stylesheets."""
+        self._dark_mode = not self._dark_mode
+        self.setStyleSheet(get_stylesheet(dark_mode=self._dark_mode))
+        self.theme_button.setText(
+            "Switch to Light Theme" if self._dark_mode else "Switch to Dark Theme"
+        )
+
+    def _update_stage_visuals(self, active_stage: int | None) -> None:
+        self.workflow_stage.setProperty("active", active_stage is not None)
+        self.workflow_stage.style().unpolish(self.workflow_stage)
+        self.workflow_stage.style().polish(self.workflow_stage)
+        for idx, pill in enumerate(self.stage_pills):
+            if active_stage is None or idx > active_stage:
+                state = "upcoming"
+            elif idx < active_stage:
+                state = "completed"
+            else:
+                state = "current"
+            pill.setProperty("state", state)
+            pill.style().unpolish(pill)
+            pill.style().polish(pill)
+
     def _show_stage(self, index: int) -> None:
         self.stack.setCurrentIndex(index)
         self.workflow_stage.setText(f"Workflow stage\n{index + 1}. {self._WORKFLOW_LABELS[index]}")
+        self._update_stage_visuals(index)
         self.nav_buttons["New Job"].setChecked(True)
 
     def _show_navigation(self, name: str) -> None:
@@ -240,6 +285,7 @@ class MainWindow(QMainWindow):
             page.load()
         self.stack.setCurrentIndex(self._page_indexes[page])
         self.workflow_stage.setText(name)
+        self._update_stage_visuals(None)
         self.nav_buttons[name].setChecked(True)
 
     def _new_job(self) -> None:
