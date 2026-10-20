@@ -107,7 +107,13 @@ def test_generated_source_upgrade_patches_known_baseline_and_keeps_backup(
     result = _run_upgrade(upgrade, "-SkipSetup", "-SkipChecks")
 
     assert result.returncode == 0, result.stderr
-    assert version_path.read_bytes() == (PROJECT_ROOT / "sheetpilot/app/version.py").read_bytes()
+
+    def _normalized_bytes(path: Path) -> bytes:
+        return path.read_bytes().replace(b"\r\n", b"\n")
+
+    assert _normalized_bytes(version_path) == _normalized_bytes(
+        PROJECT_ROOT / "sheetpilot/app/version.py"
+    )
     assert hashlib.sha256(VERSION_0_1_2).hexdigest() in version_entry["BaselineHashes"]
     assert "backed up outside" in result.stdout
     backups = list(tmp_path.glob("_sheetpilot_upgrade_backup_*"))
