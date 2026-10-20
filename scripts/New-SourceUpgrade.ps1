@@ -31,7 +31,17 @@ if ($null -eq $Git) { throw 'Git is required to generate a cumulative source upg
 function Get-Sha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $Hasher = [System.Security.Cryptography.SHA256]::Create()
+    $Stream = $null
+    try {
+        $Stream = [System.IO.File]::OpenRead($Path)
+        $Digest = $Hasher.ComputeHash($Stream)
+        return ([System.BitConverter]::ToString($Digest) -replace '-', '').ToLowerInvariant()
+    }
+    finally {
+        if ($null -ne $Stream) { $Stream.Dispose() }
+        $Hasher.Dispose()
+    }
 }
 
 function Get-GitBlobSha256 {
@@ -113,15 +123,17 @@ if ($LASTEXITCODE -ne 0) { throw 'Git could not list changed tracked files.' }
 $Untracked = @(& $Git.Path -C $ProjectRoot ls-files --others --exclude-standard)
 if ($LASTEXITCODE -ne 0) { throw 'Git could not list untracked files.' }
 $RelativeOutput = $OutputPath.Substring($ProjectPrefix.Length).Replace('\', '/')
-$Paths = @($Tracked + $Untracked) |
-    ForEach-Object { ([string]$_).Replace('\', '/') } |
-    Where-Object {
-        $_ -and
-        $_ -ne $RelativeOutput -and
-        $_ -notlike 'Upgrade-SheetPilot-*.ps1' -and
-        $_ -notmatch '(^|/)manual_beta_test(/|$)'
-    } |
-    Sort-Object -Unique
+$Paths = @(
+    @($Tracked + $Untracked) |
+        ForEach-Object { ([string]$_).Replace('\', '/') } |
+        Where-Object {
+            $_ -and
+            $_ -ne $RelativeOutput -and
+            $_ -notlike 'Upgrade-SheetPilot-*.ps1' -and
+            $_ -notmatch '(^|/)manual_beta_test(/|$)'
+        } |
+        Sort-Object -Unique
+)
 if ($Paths.Count -eq 0) { throw 'No changed files were found for the cumulative upgrade.' }
 
 $PreviousManifest = Read-PreviousManifest -Path $PreviousUpgradePath
@@ -294,7 +306,17 @@ function Get-Sha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
 
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $Hasher = [System.Security.Cryptography.SHA256]::Create()
+    $Stream = $null
+    try {
+        $Stream = [System.IO.File]::OpenRead($Path)
+        $Digest = $Hasher.ComputeHash($Stream)
+        return ([System.BitConverter]::ToString($Digest) -replace '-', '').ToLowerInvariant()
+    }
+    finally {
+        if ($null -ne $Stream) { $Stream.Dispose() }
+        $Hasher.Dispose()
+    }
 }
 
 $TempRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
