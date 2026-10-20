@@ -52,7 +52,7 @@ class BackupService:
         job_dir.mkdir(parents=True, exist_ok=True)
         name = sanitize_filename(source.name)
         stamp = timestamp.strftime("%Y%m%dT%H%M%S%fZ")
-        backup_path = ensure_within(job_dir / f"{stamp}_{name}", self.backup_root)
+        backup_path = ensure_within(job_dir / f"{stamp}_{uuid4().hex}_{name}", self.backup_root)
         partial_path = backup_path.with_suffix(f"{backup_path.suffix}.partial")
         manifest_path = backup_path.with_suffix(f"{backup_path.suffix}.manifest.json")
         if backup_path.exists() or partial_path.exists() or manifest_path.exists():
